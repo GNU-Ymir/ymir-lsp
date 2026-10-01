@@ -31,6 +31,11 @@ highlights them with the grammar of `intellij/textmate/ymir`. The command starti
 In IntelliJ IDEA, *File > New > Project… > Ymir* creates a gyllir package, an executable or a
 library, as `gyllir init` lays it out.
 
+A *Gyllir* run configuration runs `gyllir run`, `build` or `test` in a package, the locations of
+the diagnostics of gyc linked to their file. A project rooted at a package gets its configurations
+when first opened (*Run* and *Test*, or *Test* and *Build* for a library), and the gutter of
+`fn main` and of each `__test` runs the package or its tests.
+
 The build downloads the IDE of `platformVersion` (`gradle.properties`). To build against an
 installed one instead, set `platformLocalPath` to its directory, e.g. in
 `~/.gradle/gradle.properties`. Gradle needs a JDK 21 to compile the plugin, and fetches one when
