@@ -1,0 +1,22 @@
+{
+  "name": "ymir",
+  "displayName": "Ymir",
+  "version": "0.1.0",
+  "contributes": {
+    "languages": [
+      {
+        "id": "ymir",
+        "aliases": ["Ymir"],
+        "extensions": [".yr"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ymir",
+        "scopeName": "source.ymir",
+        "path": "./syntaxes/ymir.tmLanguage.json"
+      }
+    ]
+  }
+}
