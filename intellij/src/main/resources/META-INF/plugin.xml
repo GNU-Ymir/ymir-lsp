@@ -20,6 +20,8 @@
                                  displayName="Ymir"/>
         <newProjectWizard.generator implementation="org.gnu.ymir.intellij.project.YmirNewProjectWizard"/>
         <textmate.bundleProvider implementation="org.gnu.ymir.intellij.YmirTextMateBundleProvider"/>
+
+        <configurationType implementation="org.gnu.ymir.intellij.run.GyllirConfigurationType"/>
     </extensions>
 
     <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
