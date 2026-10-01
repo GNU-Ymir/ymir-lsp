@@ -18,6 +18,7 @@
                                  instance="org.gnu.ymir.intellij.YmirConfigurable"
                                  id="org.gnu.ymir.intellij.YmirConfigurable"
                                  displayName="Ymir"/>
+        <newProjectWizard.generator implementation="org.gnu.ymir.intellij.project.YmirNewProjectWizard"/>
         <textmate.bundleProvider implementation="org.gnu.ymir.intellij.YmirTextMateBundleProvider"/>
     </extensions>
 
