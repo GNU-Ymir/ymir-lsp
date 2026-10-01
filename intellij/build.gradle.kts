@@ -1,3 +1,5 @@
+import org.jetbrains.intellij.platform.gradle.TestFrameworkType
+
 plugins {
     id("org.jetbrains.kotlin.jvm") version "2.4.20"
     id("org.jetbrains.intellij.platform") version "2.19.0"
@@ -18,6 +20,9 @@ repositories {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.opentest4j:opentest4j:1.3.0")
+
     intellijPlatform {
         val local = providers.gradleProperty("platformLocalPath").orNull
         if (local != null) {
@@ -28,6 +33,7 @@ dependencies {
 
         bundledPlugin("org.jetbrains.plugins.textmate")
         plugin("com.redhat.devtools.lsp4ij", providers.gradleProperty("lsp4ijVersion").get())
+        testFramework(TestFrameworkType.Platform)
     }
 }
 
