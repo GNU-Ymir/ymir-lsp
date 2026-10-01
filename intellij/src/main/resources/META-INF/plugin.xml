@@ -1,0 +1,34 @@
+<idea-plugin>
+    <id>org.gnu.ymir</id>
+    <name>Ymir</name>
+    <vendor url="https://github.com/GNU-Ymir">GNU-Ymir</vendor>
+
+    <description><![CDATA[
+    Support of the <a href="https://github.com/GNU-Ymir">Ymir</a> language: highlighting of the
+    <code>.yr</code> files, and the diagnostics, hover, navigation, outline and completion of the
+    <code>ymir-lsp</code> language server.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>org.jetbrains.plugins.textmate</depends>
+    <depends>com.redhat.devtools.lsp4ij</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <applicationConfigurable parentId="language"
+                                 instance="org.gnu.ymir.intellij.YmirConfigurable"
+                                 id="org.gnu.ymir.intellij.YmirConfigurable"
+                                 displayName="Ymir"/>
+        <textmate.bundleProvider implementation="org.gnu.ymir.intellij.YmirTextMateBundleProvider"/>
+    </extensions>
+
+    <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
+        <server id="ymir"
+                name="Ymir"
+                factoryClass="org.gnu.ymir.intellij.YmirLanguageServerFactory">
+            <description><![CDATA[
+            The Ymir language server, <code>ymir-lsp</code>.
+            ]]></description>
+        </server>
+        <fileNamePatternMapping patterns="*.yr" serverId="ymir" languageId="ymir"/>
+    </extensions>
+</idea-plugin>

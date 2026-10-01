@@ -13,3 +13,9 @@ __doc/
 # Produced artifacts
 /ymir-lsp
 /ymir-lsp.test
+
+# The IntelliJ plugin's Gradle build
+/intellij/.gradle/
+/intellij/.intellijPlatform/
+/intellij/.kotlin/
+/intellij/build/
