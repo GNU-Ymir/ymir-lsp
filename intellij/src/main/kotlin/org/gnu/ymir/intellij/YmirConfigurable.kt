@@ -21,6 +21,12 @@ class YmirConfigurable : BoundConfigurable("Ymir") {
                     .comment("The path of <code>ymir-lsp</code>, or its name to look it up in the PATH. " +
                              "Taken into account when the server is restarted.")
             }
+            row("Gyllir:") {
+                textField()
+                    .bindText(settings::gyllirPath)
+                    .align(AlignX.FILL)
+                    .comment("The path of <code>gyllir</code>, or its name to look it up in the PATH.")
+            }
         }
     }
 }

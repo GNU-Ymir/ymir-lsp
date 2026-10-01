@@ -16,6 +16,7 @@ class YmirSettings : SimplePersistentStateComponent<YmirSettings.Options>(Option
 
     class Options : BaseState() {
         var serverPath by string(DEFAULT_SERVER)
+        var gyllirPath by string(DEFAULT_GYLLIR)
     }
 
     /** The command starting the language server, a path or a name looked up in the PATH. */
@@ -25,8 +26,16 @@ class YmirSettings : SimplePersistentStateComponent<YmirSettings.Options>(Option
             state.serverPath = value.trim().ifEmpty { DEFAULT_SERVER }
         }
 
+    /** The command of gyllir, run by the gyllir run configurations. */
+    var gyllirPath: String
+        get() = state.gyllirPath?.takeIf { it.isNotBlank() } ?: DEFAULT_GYLLIR
+        set(value) {
+            state.gyllirPath = value.trim().ifEmpty { DEFAULT_GYLLIR }
+        }
+
     companion object {
         const val DEFAULT_SERVER = "ymir-lsp"
+        const val DEFAULT_GYLLIR = "gyllir"
 
         fun getInstance(): YmirSettings = service()
     }
