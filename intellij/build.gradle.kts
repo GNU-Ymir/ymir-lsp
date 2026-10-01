@@ -52,4 +52,10 @@ tasks {
             into(intellijPlatform.projectName.map { "$it/textmate" })
         }
     }
+
+    prepareTestSandbox {
+        from(layout.projectDirectory.dir("textmate")) {
+            into(intellijPlatform.projectName.map { "$it/textmate" })
+        }
+    }
 }
