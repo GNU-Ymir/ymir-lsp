@@ -1,0 +1,15 @@
+
+# Dependencies resolved by gyllir
+.deps/
+
+# Build cache and generated documentation
+.target/
+__doc/
+
+# Left behind by a test run
+.ymir_test_success
+.ymir_coverage_*
+
+# Produced artifacts
+/ymir-lsp
+/ymir-lsp.test

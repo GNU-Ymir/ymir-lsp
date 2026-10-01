@@ -1,0 +1,6 @@
+use ymirc::global::common;
+use std::io;
+
+fn main() {
+    println("ymir-lsp, ymirc ", common::__YMIR_VERSION__);
+}
