@@ -28,6 +28,8 @@ It runs in IntelliJ-based IDEs from 2026.1, and depends on
 `.yr` files and maps its features onto the IDE, and on the bundled TextMate plugin, which
 highlights them with the grammar of `intellij/textmate/ymir`. The command starting the server is
 `ymir-lsp` from the PATH by default, and set under *Settings > Languages & Frameworks > Ymir*.
+In IntelliJ IDEA, *File > New > Project… > Ymir* creates a gyllir package, an executable or a
+library, as `gyllir init` lays it out.
 
 The build downloads the IDE of `platformVersion` (`gradle.properties`). To build against an
 installed one instead, set `platformLocalPath` to its directory, e.g. in
