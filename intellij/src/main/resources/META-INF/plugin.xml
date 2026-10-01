@@ -22,6 +22,8 @@
         <textmate.bundleProvider implementation="org.gnu.ymir.intellij.YmirTextMateBundleProvider"/>
 
         <configurationType implementation="org.gnu.ymir.intellij.run.GyllirConfigurationType"/>
+        <runConfigurationProducer implementation="org.gnu.ymir.intellij.run.GyllirRunConfigurationProducer"/>
+        <postStartupActivity implementation="org.gnu.ymir.intellij.run.GyllirProjectActivity"/>
     </extensions>
 
     <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
