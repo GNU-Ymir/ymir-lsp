@@ -10,10 +10,6 @@ name = "ymir-lsp"
 [registry]
 git = "git@github.com:GNU-Ymir/ymir-lsp.git"
 
-[std]
-version="1.14.0"
-url="https://github.com/GNU-Ymir/yruntime.git"
-
 [dependencies.ymirc]
 version = "master"
 url = "git:https://github.com/GNU-Ymir/bootstrap.git"

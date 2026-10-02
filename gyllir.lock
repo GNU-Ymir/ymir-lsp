@@ -6,4 +6,4 @@ lock-version = 1
 name = "ymirc"
 url = "git:https://github.com/GNU-Ymir/bootstrap.git"
 version = "master"
-sha = "be4f88814115cdc0461242ef87028757c9cf2f62"
+sha = "ea890e0007a7520737dbf8de0f827331bbfad6dd"
