@@ -1,0 +1,580 @@
+/**
+ * The language server: a thread queues the messages of the client, the main one
+ * answers them from the compilation of the open documents, and checks a changed
+ * one once no message came for `DEBOUNCE` milliseconds, until the next change.
+ */
+in server;
+
+mod ::code;
+mod ::compiled;
+mod ::error;
+mod ::utils;
+
+use ymir_lsp::{document, transport, unit};
+
+use ymirc::{parser, query, session};
+use ymirc::errors;
+use ymirc::errors::{diagnostic, lsp};
+use ymirc::global::{common, state};
+
+use core::concurrency::sync::semaphore;
+use core::exception;
+use std::concurrency::mail;
+use std::config::{access, data};
+use std::fs::path;
+use std::time::dur;
+
+pub def VERSION = "0.1.0";
+
+pub def DEBOUNCE = 250u64;
+
+pub def Compiled: compiled::Compiled;
+pub def RpcCode: code::RpcCode;
+pub def RpcError: error::RpcError;
+
+@final
+pub class Server {
+
+    let dmut _channel: &Channel;
+
+    // The messages read and not answered yet, one post of `_received` each
+    let dmut _inbox: &MailBox!{&Config} = copy MailBox!{&Config} ();
+    let dmut _received: &Semaphore = copy Semaphore();
+
+    let dmut _reader: (future-> void)? = none;
+
+    // The open documents, by URI
+    let dmut _docs: [[c8] => Document] = copy [];
+
+    // The latest compilation of the open documents, by URI
+    let dmut _compiled: [[c8] => Compiled] = copy [];
+
+    // The documents whose diagnostics are to be published again
+    let dmut _dirty: [[c8] => ()] = copy [];
+
+    // The sessions of the compilations, by `Unit::key`
+    let dmut _sessions: [[c8] => &Session] = copy [];
+
+    // The session of the compilation in progress, cancelled by a change
+    let dmut _compiling: (&Session)? = none;
+
+    // Moved forward by every change of an open document
+    let mut _generation: u64 = 0u64;
+
+    let mut _encoding: PositionEncoding = PositionEncoding::UTF16;
+
+    let mut _initialized: bool = false;
+
+    let mut _shutdown: bool = false;
+
+    pub self (dmut channel: &Channel)
+        with _channel = alias channel
+    {}
+
+    /**
+     * Answer the messages of the client until it asks the server to exit,
+     * or the stream ends
+     *
+     * @returns: the exit code of the server
+     */
+    pub fn run(mut self)-> i32 {
+        self._reader = (spawn self:.readMain())?;
+        loop {
+            if (self._dirty.len == 0us) {
+                self._received:.wait();
+            } else if (!self._received:.wait(timeout-> dur::millis(DEBOUNCE))) {
+                self:.checkDirty();
+                continue;
+            }
+
+            if let Ok(msg) = self._inbox:.receive() {
+                if let Ok(code) = self:.handle(msg) break code;
+            }
+        }
+    }
+
+    /*!
+     * ====================================================================================================
+     * =====================================          READING          ====================================
+     * ====================================================================================================
+     */
+
+    /**
+     * Queue the messages of the client, a `None` once the stream ended, an
+     * empty `Dict` for one that is not JSON
+     */
+    fn readMain(mut self) {
+        loop {
+            if let Ok(body) = self._channel:.receive() {
+                let msg = if let Ok(m) = std::config::json::parse(body)? { m } else { copy Dict() };
+                if let Ok(method) = msg.str("method") {
+                    if (method == "textDocument/didChange" || method == "textDocument/didClose" || method == "exit") {
+                        self:.cancelCompilation();
+                    }
+                }
+
+                self:.post(msg);
+            } else {
+                self:.post(copy data::None());
+                break;
+            }
+        }
+    }
+
+    fn post(mut self, msg: &Config) {
+        self._inbox:.send(msg);
+        self._received:.post();
+    }
+
+    fn cancelCompilation(mut self) {
+        atomic self {
+            if let Ok(dmut s) = alias self._compiling {
+                s:.cancel();
+            }
+        }
+    }
+
+    /*!
+     * ====================================================================================================
+     * ====================================          DISPATCHING          =================================
+     * ====================================================================================================
+     */
+
+    /**
+     * Answer `msg`
+     *
+     * @returns: the exit code of the server if it has to stop
+     */
+    fn handle(mut self, msg: &Config)-> (i32)? {
+        if (msg of data::None) return (if (self._shutdown) { 0 } else { 1 })?;
+
+        let id = msg["id"]?;
+        let method = if let Ok(m) = msg.str("method") { m } else {
+            if let Ok(_) = id return none; // a response, the server sends no request
+            self:.error(copy data::None(), RpcCode::PARSE_ERROR, "the message is not a JSON-RPC one");
+            return none;
+        };
+
+        let params = msg["params"]? ?? copy Dict();
+        if let Ok(i) = id {
+            {
+                let res = self:.request(method, params);
+                self:.respond(i, res);
+            } catch {
+                err: &RpcError => self:.error(i, err.code, err.msg);
+            }
+
+            return none;
+        }
+
+        if (method == "exit") return (if (self._shutdown) { 0 } else { 1 })?;
+        self:.notify(method, params);
+        none
+    }
+
+    /**
+     * @returns: the result of the request `method`
+     */
+    fn request(mut self, method: [c8], params: &Config)-> &Config
+        throws RpcError
+    {
+        if (method == "initialize") return self:.initialize(params);
+        if (!self._initialized) throw copy RpcError(RpcCode::SERVER_NOT_INITIALIZED, "the server is not initialized");
+        if (self._shutdown) throw copy RpcError(RpcCode::INVALID_REQUEST, "the server is shut down");
+
+        match method {
+            "shutdown" => {
+                self._shutdown = true;
+                copy data::None()
+            }
+            "textDocument/hover"          => self:.hover(params)
+            "textDocument/definition"     => self:.definition(params)
+            "textDocument/references"     => self:.references(params)
+            "textDocument/documentSymbol" => self:.documentSymbol(params)
+            "textDocument/completion"     => self:.completion(params)
+            "textDocument/codeAction"     => self:.codeAction(params)
+            _ => throw copy RpcError(RpcCode::METHOD_NOT_FOUND, "unknown method " ~ method);
+        }
+    }
+
+    /**
+     * Apply the notification `method`
+     */
+    fn notify(mut self, method: [c8], params: &Config) {
+        if (!self._initialized) return;
+        match method {
+            "textDocument/didOpen" => {
+                let d = params.at("textDocument");
+                if let Ok(uri) = d.str("uri") {
+                    self:.change(Document(uri, d.int("version") ?? 0i64, d.str("text") ?? ""));
+                }
+            }
+            "textDocument/didChange" => {
+                if let Ok(uri) = self.uriOf(params) {
+                    let changes = params.elements("contentChanges");
+                    if (changes.len != 0us) {
+                        if let Ok(text) = changes[changes.len - 1us].str("text") {
+                            let version = params.int("textDocument", "version") ?? 0i64;
+                            self:.change(Document(uri, version, text));
+                        }
+                    }
+                }
+            }
+            "textDocument/didSave" => {
+                for uri, _ in self._docs {
+                    self._dirty[uri] = ();
+                }
+            }
+            "textDocument/didClose" => {
+                if let Ok(uri) = self.uriOf(params) {
+                    self:.close(uri);
+                }
+            }
+        }
+    }
+
+    /*!
+     * ====================================================================================================
+     * ======================================          REQUESTS          ==================================
+     * ====================================================================================================
+     */
+
+    fn initialize(mut self, params: &Config)-> &Config {
+        self._initialized = true;
+        for e in params.elements("capabilities", "general", "positionEncodings") {
+            if let Str(value-> v) = e {
+                if (v == "utf-8") self._encoding = PositionEncoding::UTF8;
+            }
+        }
+
+        let dmut sync = copy Dict();
+        sync["openClose"] = copy Bool(true);
+        sync["change"] = copy Int(1i64);
+        sync["save"] = copy Dict();
+
+        let dmut triggers = copy Array();
+        triggers:.push(copy Str("."));
+        triggers:.push(copy Str(":"));
+        let dmut completion = copy Dict();
+        completion["triggerCharacters"] = triggers;
+
+        let dmut kinds = copy Array();
+        kinds:.push(copy Str("quickfix"));
+        let dmut actions = copy Dict();
+        actions["codeActionKinds"] = kinds;
+
+        let dmut caps = copy Dict();
+        caps["positionEncoding"] = copy Str(if (self._encoding == PositionEncoding::UTF8) { "utf-8" } else { "utf-16" });
+        caps["textDocumentSync"] = sync;
+        caps["hoverProvider"] = copy Bool(true);
+        caps["definitionProvider"] = copy Bool(true);
+        caps["referencesProvider"] = copy Bool(true);
+        caps["documentSymbolProvider"] = copy Bool(true);
+        caps["completionProvider"] = completion;
+        caps["codeActionProvider"] = actions;
+
+        let dmut info = copy Dict();
+        info["name"] = copy Str("ymir-lsp");
+        info["version"] = copy Str(VERSION ~ " (ymirc " ~ common::__YMIR_VERSION__ ~ ")");
+
+        let dmut res = copy Dict();
+        res["capabilities"] = caps;
+        res["serverInfo"] = info;
+        res
+    }
+
+    fn hover(mut self, params: &Config)-> &Config
+        throws RpcError
+    {
+        let (doc, c, line, col) = self:.position(params);
+        if let Ok(h) = HoverQuery::at(c.parser.getIndex(), doc.path, line, col) {
+            return QueryExporting::dump(h, self._encoding);
+        }
+
+        copy data::None()
+    }
+
+    fn definition(mut self, params: &Config)-> &Config
+        throws RpcError
+    {
+        let (doc, c, line, col) = self:.position(params);
+        if let Ok(d) = NavigationQuery::definition(c.parser.getIndex(), doc.path, line, col) {
+            return QueryExporting::dump(copy [d], self._encoding);
+        }
+
+        copy data::None()
+    }
+
+    fn references(mut self, params: &Config)-> &Config
+        throws RpcError
+    {
+        let (doc, c, line, col) = self:.position(params);
+        let withDecl = params.boolean("context", "includeDeclaration") ?? true;
+        QueryExporting::dump(NavigationQuery::references(c.parser.getIndex(), doc.path, line, col, withDeclaration-> withDecl), self._encoding)
+    }
+
+    fn documentSymbol(mut self, params: &Config)-> &Config {
+        let uri = self.uriOf(params) ?? "";
+        if let Ok(doc) = self._docs[uri] {
+            if let Ok(c) = self:.compiled(uri) {
+                return QueryExporting::dump(OutlineQuery::symbols(c.parser.getModuleSymbol(), doc.path), self._encoding);
+            }
+        }
+
+        copy Array()
+    }
+
+    fn completion(mut self, params: &Config)-> &Config
+        throws RpcError
+    {
+        let (doc, c, line, col) = self:.position(params);
+        QueryExporting::dump(CompletionQuery::at(c.parser.getIndex(), c.parser.getModuleSymbol(), doc.path, c.text, line, col))
+    }
+
+    /**
+     * @returns: the quick fixes of the diagnostics of the range, carried in their `data`
+     */
+    fn codeAction(mut self, params: &Config)-> &Config {
+        let dmut res = copy Array();
+        for diag in params.elements("context", "diagnostics") {
+            for fix in diag.elements("data", "fixes") {
+                if let f: &Dict = fix {
+                    let dmut action = copy Dict();
+                    for k, v in f[] {
+                        action[k] = v;
+                    }
+
+                    let dmut diags = copy Array();
+                    diags:.push(diag);
+                    action["diagnostics"] = diags;
+                    res:.push(action);
+                }
+            }
+        }
+
+        res
+    }
+
+    /**
+     * @returns: the document of the request, its compilation, and the line and
+     * column of the queries of its position
+     */
+    fn position(mut self, params: &Config)-> (Document, Compiled, u64, u64)
+        throws RpcError
+    {
+        let uri = self.uriOf(params) ?? "";
+        let line = params.int("position", "line");
+        let character = params.int("position", "character");
+        if let Ok(doc) = self._docs[uri] {
+            if let Ok(c) = self:.compiled(uri) {
+                if let Ok(l) = line {
+                    if let Ok(ch) = character {
+                        let (ql, qc) = QueryExporting::fromPosition(c.text, cast!u64(l), cast!u64(ch), self._encoding);
+                        return (doc, c, ql, qc);
+                    }
+                }
+
+                throw copy RpcError(RpcCode::INVALID_PARAMS, "the request has no position");
+            }
+        }
+
+        throw copy RpcError(RpcCode::INVALID_PARAMS, "the document " ~ uri ~ " is not open");
+    }
+
+    fn uriOf(self, params: &Config)-> ([c8])? {
+        params.str("textDocument", "uri")
+    }
+
+    /*!
+     * ====================================================================================================
+     * =====================================          DOCUMENTS          ==================================
+     * ====================================================================================================
+     */
+
+    fn change(mut self, doc: Document) {
+        self._docs[doc.uri] = doc;
+        self._dirty[doc.uri] = ();
+        self._generation += 1u64;
+    }
+
+    fn close(mut self, uri: [c8]) {
+        if let Ok(doc) = self._docs[uri] {
+            self._docs:.remove(uri);
+            self._compiled:.remove(uri);
+            self._dirty:.remove(uri);
+            self._generation += 1u64;
+
+            if (doc.path != "") {
+                let key = Unit::compiling(Path(doc.path)).key();
+                let mut shared = false;
+                for _, d in self._docs {
+                    if (d.path != "" && Unit::compiling(Path(d.path)).key() == key) shared = true;
+                }
+
+                if (!shared) self._sessions:.remove(key);
+            }
+
+            self:.publish(uri, copy Array());
+        }
+    }
+
+    /**
+     * Publish the diagnostics of the documents changed, until a message comes
+     */
+    fn checkDirty(mut self) {
+        for uri in copy [u for u, _ in self._dirty] {
+            if (self._received.get() > 0) return;
+            self:.compiled(uri);
+        }
+    }
+
+    /**
+     * @returns: the compilation of the open document `uri` after the latest
+     * change, none if it is not a file, or if its compilation was cancelled
+     */
+    fn compiled(mut self, uri: [c8])-> (Compiled)? {
+        if let Ok(c) = self._compiled[uri] {
+            if (c.generation == self._generation) return c?;
+        }
+
+        let doc = if let Ok(d) = self._docs[uri] { d } else { return none; };
+        if (doc.path == "") return none;
+
+        let unit = Unit::compiling(Path(doc.path));
+        let dmut session = self:.sessionOf(unit);
+
+        let dmut overlay: [Path => [c8]] = copy [];
+        for _, d in self._docs if d.path != "" {
+            overlay[Path(d.path)] = copy d.text;
+        }
+
+        let dmut p = copy Parser::inSession(alias session, unit.root.toStr(), overlay-> overlay, index-> true);
+        atomic self {
+            self._compiling = (alias session)?;
+        }
+
+        let mut thrown: [&ErrorMsg] = [];
+        let mut cancelled = false;
+        {
+            p:.parseAll();
+        } catch {
+            err: &ErrorMsg => {
+                if (err.msg == diagnostic::CANCELLED) cancelled = true;
+                else thrown = copy [err];
+            }
+        }
+
+        atomic self {
+            self._compiling = none;
+        }
+
+        if (cancelled) return none;
+
+        session:.enter();
+        let diags = Flattening::diagnosticsOf(p.getWarnings() ~ thrown, encoding-> self._encoding);
+        let dmut published = copy Array();
+        for d in diags {
+            published:.push(self.inDocument(d, doc.path));
+        }
+
+        session:.exit();
+
+        let c = Compiled(p, doc.text, self._generation);
+        self._compiled[uri] = c;
+        self._dirty:.remove(uri);
+        self:.publish(uri, published);
+        c?
+    }
+
+    /**
+     * @returns: the diagnostic `d` of the compilation of the document `path`,
+     * as one of it: placed at its start when it is about another file, the
+     * place it is about being its first related information
+     */
+    fn inDocument(self, d: LspDiagnostic, path: [c8])-> &Config {
+        if (d.loc.file == path) return lsp::JsonExporting::dump(d);
+
+        let start = lsp::Position(0u64, 0u64);
+        let mut related = d.related;
+        let mut msg = d.msg;
+        if (d.loc.file != "") {
+            related = [lsp::RelatedInfo(d.loc, d.msg)] ~ related;
+            msg = state::relativePath(d.loc.file) ~ ":" ~ std::conv::to!{[c8]} (d.loc.start.line + 1u64) ~ ": " ~ d.msg;
+        }
+
+        lsp::JsonExporting::dump(LspDiagnostic(lsp::Location(path, start, start), d.severity, d.code, msg, related, []))
+    }
+
+    /**
+     * @returns: the session of the compilations of `unit`, configured as gyllir
+     * compiles it, with its tests, the warnings reported and not thrown
+     */
+    fn sessionOf(mut self, unit: Unit)-> dmut &Session {
+        let key = unit.key();
+        if let Ok(dmut s) = alias self._sessions[key] return alias s;
+
+        let dmut s = copy Session();
+        s:.enter();
+        state::activateErrorRecovery();
+        state::deactivateYilPass();
+        state::activateDebug();
+        state::addVersion(Versions::DEBUG);
+        state::activateUnittest();
+        state::addVersion(Versions::UNITTEST);
+        for v in utils::targetVersions() ~ unit.versions {
+            state::addVersion(v);
+        }
+
+        for i in unit.includes {
+            state::addIncludeDir(i.toStr());
+        }
+
+        if (!unit.prefix.isEmpty()) state::setPrefix(unit.prefix.toStr());
+        if (!unit.module.isEmpty()) state::insertPathFilter(unit.module);
+        s:.exit();
+
+        self._sessions[key] = alias s;
+        alias s
+    }
+
+    /*!
+     * ====================================================================================================
+     * ======================================          SENDING          ===================================
+     * ====================================================================================================
+     */
+
+    fn publish(mut self, uri: [c8], diagnostics: &Config) {
+        let dmut params = copy Dict();
+        params["uri"] = copy Str(uri);
+        params["diagnostics"] = diagnostics;
+        if let Ok(d) = self._docs[uri] {
+            params["version"] = copy Int(d.version);
+        }
+
+        let dmut msg = copy Dict();
+        msg["jsonrpc"] = copy Str("2.0");
+        msg["method"] = copy Str("textDocument/publishDiagnostics");
+        msg["params"] = params;
+        self._channel:.send(std::config::json::dump(msg));
+    }
+
+    fn respond(mut self, id: &Config, result: &Config) {
+        let dmut msg = copy Dict();
+        msg["jsonrpc"] = copy Str("2.0");
+        msg["id"] = id;
+        msg["result"] = result;
+        self._channel:.send(std::config::json::dump(msg));
+    }
+
+    fn error(mut self, id: &Config, code: RpcCode, message: [c8]) {
+        let dmut err = copy Dict();
+        err["code"] = copy Int(cast!i64(code));
+        err["message"] = copy Str(message);
+
+        let dmut msg = copy Dict();
+        msg["jsonrpc"] = copy Str("2.0");
+        msg["id"] = id;
+        msg["error"] = err;
+        self._channel:.send(std::config::json::dump(msg));
+    }
+}
