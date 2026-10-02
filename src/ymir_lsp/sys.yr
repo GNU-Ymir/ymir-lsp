@@ -1,0 +1,10 @@
+/**
+ * The system calls the server makes on its file descriptors.
+ */
+in sys;
+
+pub extern (C) fn read(fd: i32, dmut buf: *c8, size: usize)-> isize;
+pub extern (C) fn write(fd: i32, buf: *c8, size: usize)-> isize;
+pub extern (C) fn dup(fd: i32)-> i32;
+pub extern (C) fn dup2(fd: i32, to: i32)-> i32;
+pub extern (C) fn exit(code: i32);
