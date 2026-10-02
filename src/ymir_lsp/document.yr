@@ -1,0 +1,53 @@
+/**
+ * The documents the client opened, and the paths their URIs name.
+ */
+in document;
+
+use ymirc::errors::lsp;
+
+use std::encoding::percent;
+
+/**
+ * A document open in the client, its text as edited there
+ */
+pub record Document {
+
+    pub let uri: [c8];
+
+    // The absolute path of the file, empty if the URI is not a `file` one
+    pub let path: [c8];
+
+    pub let version: i64;
+
+    pub let text: [c8];
+
+    pub self (uri: [c8], version: i64, text: [c8])
+        with uri = uri
+        , path = Document::toPath(uri) ?? ""
+        , version = version
+        , text = text
+    {}
+}
+
+/**
+ * The paths and the URIs of the documents
+ */
+pub mod Document {
+
+    /**
+     * @returns: the path of the `file` URI `uri`, percent-decoded, none if it is not one
+     */
+    pub fn toPath(uri: [c8])-> ([c8])? {
+        let scheme = "file://";
+        if (uri.len < scheme.len || uri[0us .. scheme.len] != scheme) return none;
+
+        percent::decode(uri[scheme.len .. $])?
+    }
+
+    /**
+     * @returns: the `file` URI of the absolute path `path`
+     */
+    pub fn ofPath(path: [c8])-> [c8] {
+        lsp::JsonExporting::uri(path)
+    }
+}
