@@ -1,0 +1,110 @@
+/**
+ * What a source file is compiled as, read from the `gyllir.toml` of its
+ * package as gyllir would build it.
+ */
+in unit;
+
+mod ::utils;
+
+use std::config::{_, toml};
+use std::fs::{path, sys};
+
+pub def GYLLIR_CONFIG = "gyllir.toml";
+pub def DEPS_DIR      = ".deps";
+
+/**
+ * The compilation a source file is checked by
+ */
+pub record Unit {
+
+    // The root file of the package compiled
+    pub let root: Path;
+
+    // The module of the file, from the directory of `root` and without
+    // extension; empty when the file is compiled alone, as its own root
+    pub let module: Path;
+
+    // The root files of the packages it imports
+    pub let includes: [Path];
+
+    // The versions its package activates
+    pub let versions: [[c8]];
+
+    // The prefix of the std it is compiled against, as `-iprefix`; empty for
+    // the one of the compiler
+    pub let prefix: Path;
+
+    pub self (root: Path, module: Path = Path(), includes: [Path] = [], versions: [[c8]] = [], prefix: Path = Path())
+        with root = root
+        , module = module
+        , includes = includes
+        , versions = versions
+        , prefix = prefix
+    {}
+
+    /**
+     * @returns: the identity of the compilation, the same for the files of a module
+     */
+    pub fn key(self)-> [c8] {
+        self.root.toStr() ~ "#" ~ self.module.toStr()
+    }
+}
+
+/**
+ * The compilation a source file is checked by, from its package
+ */
+pub mod Unit {
+
+    /**
+     * @returns: the compilation of the absolute path `file`: the module of the
+     * package of the closest `gyllir.toml` it is in the source or the test
+     * directory of, the file alone otherwise
+     */
+    pub fn compiling(file: Path)-> Unit {
+        let mut dir = file.parent();
+        while (!dir.isEmpty()) {
+            if let Ok(cfg) = Unit::config(dir) {
+                if let Ok(u) = utils::inPackage(dir, cfg, file) return u;
+                break;
+            }
+
+            dir = dir.parent();
+        }
+
+        Unit(file)
+    }
+
+    /**
+     * @returns: the configuration of the package `dir`, none if it has no readable one
+     */
+    pub fn config(dir: Path)-> (&Config)? {
+        let file = dir.push(GYLLIR_CONFIG);
+        if (!sys::isFile(file)) return none;
+        toml::parse(sys::readFile(file))?
+    }
+
+    /**
+     * @returns: the root file of the sources of the package `dir` configured by `cfg`
+     */
+    pub fn sourceRoot(dir: Path, cfg: &Config)-> Path {
+        let src = dir.push(cfg.str("source-dir") ?? "src");
+        if let Ok(name) = cfg.str("package-root") {
+            if (name != "") return src.push(name ~ ".yr");
+        }
+
+        src.push(if (cfg.str("type") ?? "" == "library") { "__lib__.yr" } else { "main.yr" })
+    }
+
+    /**
+     * @returns: the prefix of the std the `[std]` of the package `dir` resolved
+     * in its `.deps`, empty when it is the one of the compiler
+     */
+    pub fn stdPrefix(dir: Path, cfg: &Config)-> Path {
+        if let Ok(_) = cfg.at("std") {
+            let prefix = dir.push(DEPS_DIR).push("std").push(".iprefix");
+            if (sys::isDir(prefix)) return prefix;
+        }
+
+        Path()
+    }
+}

@@ -1,0 +1,118 @@
+in server;
+
+use utils;
+
+use ymir_lsp::{document, server, transport};
+
+use std::env;
+use std::config::{access, data};
+
+/**
+ * @returns: the messages the server sent when given `input`, and its exit code
+ */
+fn session(input: [c8])-> ([&Config], i32) {
+    let dmut t = copy MemoryTransport(input);
+    let dmut c = copy Channel(alias t);
+    let dmut s = copy Server(alias c);
+    let code = s:.run();
+
+    let dmut out = copy MemoryTransport(t.sent());
+    let dmut r = copy Channel(alias out);
+    let mut res: [&Config] = [];
+    loop {
+        if let Ok(b) = r:.receive() {
+            res ~= [std::config::json::parse(b)? ?? copy data::None()];
+        } else break;
+    }
+
+    (res, code)
+}
+
+fn request(id: i64, method: [c8], params: [c8])-> [c8] {
+    utils::frame("{\"jsonrpc\":\"2.0\",\"id\":" ~ std::conv::to!{[c8]} (id) ~ ",\"method\":\"" ~ method ~ "\",\"params\":" ~ params ~ "}")
+}
+
+fn notification(method: [c8], params: [c8])-> [c8] {
+    utils::frame("{\"jsonrpc\":\"2.0\",\"method\":\"" ~ method ~ "\",\"params\":" ~ params ~ "}")
+}
+
+fn at(doc: [c8], line: i32, character: i32)-> [c8] {
+    doc[0us .. $ - 1us] ~ ",\"position\":{\"line\":" ~ std::conv::to!{[c8]} (line) ~ ",\"character\":" ~ std::conv::to!{[c8]} (character) ~ "}}"
+}
+
+fn response(msgs: [&Config], id: i64)-> &Config {
+    for m in msgs {
+        if (m.int("id") ?? -1i64 == id) return m;
+    }
+
+    copy data::None()
+}
+
+fn diagnostics(msgs: [&Config])-> [[&Config]] {
+    let mut res: [[&Config]] = [];
+    for m in msgs if m.str("method") ?? "" == "textDocument/publishDiagnostics" {
+        res ~= [m.elements("params", "diagnostics")];
+    }
+
+    res
+}
+
+__test a_session_answers_from_the_compilation_of_the_document {
+    let path = env::currentDir().push("test_resources/server/test1.yr").toStr();
+    let uri = Document::ofPath(path);
+    let text = "in test1;\n\n/**\n * Adds two numbers\n */\npub fn add (a: i32, b: i32)-> i32 {\n    a + b\n}\n\nfn main () {\n    let x = add (1, 2);\n    let y: i32 = \"oops\";\n}\n";
+    let fixed = "in test1;\n\n/**\n * Adds two numbers\n */\npub fn add (a: i32, b: i32)-> i32 {\n    a + b\n}\n\nfn main () {\n    let x = add (1, 2);\n    let y: i32 = x;\n}\n";
+    let doc = "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(uri)) ~ "}}";
+
+    let input = request(1i64, "textDocument/hover", at(doc, 10, 13))
+        ~ request(2i64, "initialize", "{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-16\",\"utf-8\"]}}}")
+        ~ notification("initialized", "{}")
+        ~ notification("textDocument/didOpen", "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(uri)) ~ ",\"languageId\":\"ymir\",\"version\":1,\"text\":" ~ std::config::json::dump(copy Str(text)) ~ "}}")
+        ~ request(3i64, "textDocument/hover", at(doc, 10, 13))
+        ~ request(4i64, "textDocument/definition", at(doc, 10, 13))
+        ~ notification("textDocument/didChange", "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(uri)) ~ ",\"version\":2},\"contentChanges\":[{\"text\":" ~ std::config::json::dump(copy Str(fixed)) ~ "}]}")
+        ~ request(5i64, "textDocument/documentSymbol", doc)
+        ~ request(6i64, "workspace/unknown", "{}")
+        ~ request(7i64, "shutdown", "null")
+        ~ notification("exit", "null");
+
+    let (msgs, code) = session(input);
+    assert(code == 0);
+
+    // nothing is answered before the initialization
+    assert(response(msgs, 1i64).int("error", "code") ?? 0i64 == -32002i64);
+
+    let caps = response(msgs, 2i64).at("result", "capabilities");
+    assert(caps.str("positionEncoding") ?? "" == "utf-8");
+    assert(caps.boolean("hoverProvider") ?? false);
+
+    assert(response(msgs, 3i64).str("result", "contents", "value") ?? "" == "test1::add (a: i32, b: i32)-> i32\n\nAdds two numbers");
+
+    let defs = response(msgs, 4i64).elements("result");
+    assert(defs.len == 1us && defs[0].str("uri") ?? "" == uri);
+    assert(defs[0].int("range", "start", "line") ?? 0i64 == 5i64);
+
+    let syms = response(msgs, 5i64).elements("result");
+    assert(copy [s.str("name") ?? "" for s in syms] == ["add", "main"]);
+
+    assert(response(msgs, 6i64).int("error", "code") ?? 0i64 == -32601i64);
+    if let data::None() = response(msgs, 7i64).at("result") ?? copy Dict() {} else { assert(false, "shutdown answered with a result"); }
+
+    // the error of the document, and once it is fixed the warning it reports instead of throwing
+    let published = diagnostics(msgs);
+    assert(published.len == 2us);
+    assert(published[0].len == 1us && published[0][0].str("code") ?? "" == "E4095");
+    assert(published[1].len == 1us && published[1][0].str("code") ?? "" == "E4038");
+    assert(published[1][0].int("severity") ?? 0i64 == 2i64);
+}
+
+__test a_session_ended_without_a_shutdown_fails {
+    let (msgs, code) = session(request(1i64, "initialize", "{}"));
+    assert(msgs.len == 1us && code == 1);
+}
+
+__test a_message_that_is_not_json_is_answered_with_an_error {
+    let (msgs, _) = session(utils::frame("{not json"));
+    assert(msgs.len == 1us);
+    assert(msgs[0].int("error", "code") ?? 0i64 == -32700i64);
+}

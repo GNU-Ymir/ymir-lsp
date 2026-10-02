@@ -1,0 +1,25 @@
+in document;
+
+use ymir_lsp::document;
+
+__test a_file_uri_names_a_path {
+    assert(Document::toPath("file:///home/a/b.yr") ?? "" == "/home/a/b.yr");
+    assert(Document::toPath("file:///home/a%20b/%C3%A9.yr") ?? "" == "/home/a b/é.yr");
+
+    // a malformed escape is kept as it is
+    assert(Document::toPath("file:///a%2") ?? "" == "/a%2");
+
+    if let Ok(_) = Document::toPath("untitled:Untitled-1") { assert(false, "a path of a non file URI"); }
+}
+
+__test a_path_is_written_as_a_uri {
+    let path = "/home/a b/é.yr";
+    assert(Document::ofPath(path) == "file:///home/a%20b/%C3%A9.yr");
+    assert(Document::toPath(Document::ofPath(path)) ?? "" == path);
+}
+
+__test a_document_knows_its_path {
+    let d = Document("file:///x/y.yr", 3i64, "in y;");
+    assert(d.path == "/x/y.yr" && d.version == 3i64);
+    assert(Document("untitled:1", 1i64, "").path == "");
+}

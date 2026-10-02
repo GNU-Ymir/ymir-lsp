@@ -14,6 +14,9 @@ __doc/
 /ymir-lsp
 /ymir-lsp.test
 
+# IntelliJ project files
+.idea/
+
 # The IntelliJ plugin's Gradle build
 /intellij/.gradle/
 /intellij/.intellijPlatform/

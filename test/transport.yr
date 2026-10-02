@@ -1,0 +1,38 @@
+in transport;
+
+use utils;
+
+use ymir_lsp::transport;
+
+fn bodies(input: [c8], chunk: usize)-> [[c8]] {
+    let dmut t = copy MemoryTransport(input, chunk-> chunk);
+    let dmut c = copy Channel(alias t);
+    let mut res: [[c8]] = [];
+    loop {
+        if let Ok(b) = c:.receive() { res ~= [b]; } else break;
+    }
+
+    res
+}
+
+__test messages_are_read_from_their_header {
+    let input = utils::frame("{\"a\":1}") ~ "content-length:  2\r\nContent-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\n[]" ~ utils::frame("");
+
+    // whatever the size of the chunks the stream is read by
+    for chunk in [1us, 3us, 7us, 4096us] {
+        assert(bodies(input, chunk) == ["{\"a\":1}", "[]", ""]);
+    }
+}
+
+__test a_message_cut_by_the_end_of_the_stream_is_not_read {
+    assert(bodies(utils::frame("{}") ~ "Content-Length: 10\r\n\r\n{}", 4096us) == ["{}"]);
+    assert(bodies("Content-Length: 10\r\n", 4096us).len == 0us);
+    assert(bodies("", 4096us).len == 0us);
+}
+
+__test a_message_is_sent_with_its_header {
+    let dmut t = copy MemoryTransport("");
+    let dmut c = copy Channel(alias t);
+    assert(c:.send("{\"é\":1}"));
+    assert(t.sent() == "Content-Length: 8\r\n\r\n{\"é\":1}");
+}

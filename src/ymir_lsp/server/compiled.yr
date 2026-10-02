@@ -1,0 +1,26 @@
+/**
+ * The compilations of the open documents.
+ */
+in compiled;
+
+use ymirc::parser;
+
+/**
+ * The compilation of a document, and what it was compiled from
+ */
+pub record Compiled {
+
+    pub let parser: &Parser;
+
+    // The text of the document compiled
+    pub let text: [c8];
+
+    // The change of the open documents it was compiled after
+    pub let generation: u64;
+
+    pub self (parser: &Parser, text: [c8], generation: u64)
+        with parser = parser
+        , text = text
+        , generation = generation
+    {}
+}

@@ -1,0 +1,96 @@
+in unit;
+
+use ymir_lsp::unit;
+
+use std::fs::{path, sys};
+
+/**
+ * @returns: a package `pkg`, depending on `dep` depending on `sub`, and on the
+ * std its `.deps` holds, in a new temporary directory
+ */
+fn package()-> Path {
+    let files = copy [
+        ("gyllir.toml", "name = \"pkg\"\ntype = \"executable\"\nflags = [\"-fversion=Feature\", \"-O2\"]\n\n[std]\nversion = \"1.14.1\"\n\n[dependencies.dep]\nversion = \"master\"\n"),
+        (".deps/std/.iprefix/include/ymir/1.14/__lib__.yr", "in __lib__;\n"),
+        ("src/main.yr", "mod ::a;\n"),
+        ("src/a/b.yr", "in b;\n"),
+        ("test/__test__.yr", "mod .t;\n"),
+        ("test/t.yr", "in t;\n"),
+        ("notes/x.yr", "in x;\n"),
+        (".deps/dep/gyllir.toml", "name = \"dep\"\ntype = \"library\"\npackage-root = \"dep\"\n\n[dependencies.sub]\nversion = \"master\"\n"),
+        (".deps/dep/src/dep.yr", "in dep;\n"),
+        (".deps/sub/gyllir.toml", "name = \"sub\"\ntype = \"library\"\n"),
+        (".deps/sub/src/__lib__.yr", "in __lib__;\n")
+    ];
+
+    {
+        let pkg = sys::tempDirectory(prefix-> "ymir-lsp-unit").push("pkg");
+        for f in files {
+            let (name, content) = f;
+            let file = pkg.push(name);
+            if (!sys::isDir(file.parent())) sys::createDir(file.parent(), recursive-> true);
+            sys::writeFile(file, content);
+        }
+
+        pkg
+    } catch {
+        _ => Path("/nonexistent/pkg")
+    }
+}
+
+fn remove(pkg: Path) {
+    sys::removeDir(pkg.parent(), recursive-> true);
+} catch {
+    _ => {}
+}
+
+fn joined(ps: [Path])-> [c8] {
+    let mut res = "";
+    for p in ps { res = res ~ p.toStr() ~ ";"; }
+    res
+}
+
+fn paths(ps: [Path])-> [[c8]] {
+    copy [p.toStr() for p in ps]
+}
+
+__test a_source_file_is_a_module_of_its_package {
+    let pkg = package();
+    let u = Unit::compiling(pkg.push("src/a/b.yr"));
+    assert(u.root.toStr() == pkg.push("src/main.yr").toStr());
+    assert(u.module.toStr() == "a/b");
+    assert(paths(u.includes) == [pkg.push(".deps/dep/src/dep.yr").toStr(), pkg.push(".deps/sub/src/__lib__.yr").toStr()], joined(u.includes));
+    assert(u.versions == ["Feature"]);
+    assert(u.prefix.toStr() == pkg.push(".deps/std/.iprefix").toStr());
+
+    // a dependency declaring no std uses the one of the compiler
+    let dep = Unit::compiling(pkg.push(".deps/dep/src/dep.yr"));
+    assert(dep.module.toStr() == "dep" && dep.prefix.isEmpty());
+
+    let m = Unit::compiling(pkg.push("src/main.yr"));
+    assert(m.module.toStr() == "main");
+    assert(m.key() != u.key() && m.root.toStr() == u.root.toStr());
+    remove(pkg);
+}
+
+__test a_test_file_is_a_module_of_the_tests_of_its_package {
+    let pkg = package();
+    let u = Unit::compiling(pkg.push("test/t.yr"));
+    assert(u.root.toStr() == pkg.push("test/__test__.yr").toStr());
+    assert(u.module.toStr() == "t");
+
+    // the tests import the package itself
+    assert(paths(u.includes) == [pkg.push(".deps/dep/src/dep.yr").toStr(), pkg.push(".deps/sub/src/__lib__.yr").toStr(), pkg.push("src/main.yr").toStr()], joined(u.includes));
+    remove(pkg);
+}
+
+__test a_file_out_of_a_package_is_compiled_alone {
+    let pkg = package();
+    for file in [pkg.push("notes/x.yr"), pkg.parent().push("lone.yr")] {
+        let u = Unit::compiling(file);
+        assert(u.root.toStr() == file.toStr());
+        assert(u.module.isEmpty() && u.includes.len == 0us);
+    }
+
+    remove(pkg);
+}

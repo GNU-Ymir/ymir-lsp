@@ -1,0 +1,35 @@
+/**
+ * The reading of the headers of the messages.
+ */
+in utils;
+
+use std::conv;
+
+/**
+ * @returns: the index of the first line break of `txt` from `from`
+ */
+pub fn newlineIn(txt: [c8], from: usize)-> (usize)? {
+    for i in from .. txt.len {
+        if (txt[i] == '\n') return i?;
+    }
+
+    none
+}
+
+/**
+ * @returns: the length of the header `line`, none if it is not a `Content-Length`
+ */
+pub fn contentLength(line: [c8])-> (usize)? {
+    let name = "content-length:";
+    if (line.len < name.len) return none;
+    for i in 0us .. name.len {
+        if (std::char::toLower(line[i]) != name[i]) return none;
+    }
+
+    let mut b = name.len;
+    let mut e = line.len;
+    while (b < e && line[b] == ' ') { b += 1us; }
+    while (e > b && line[e - 1us] == ' ') { e -= 1us; }
+
+    std::conv::to!{usize} (line[b .. e])?
+}

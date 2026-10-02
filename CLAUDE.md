@@ -26,6 +26,18 @@ Concise comments:
 - a comment of more than 3 lines is generally too verbose
 
 Commits:
-- split work in logical commits, one module or one behavior each
+- split work in logical commits
+- a commit is one piece: one module, or one behavior. A feature spread over several modules is
+  one commit per module, never a single commit adding them all
+- order the commits like the modules depend on each other: chore, then the modules of the server
+  (`sys`, `transport`, `document`, `unit`, `server`, then `main`), then the IntelliJ plugin, then
+  tests, then docs
+- a commit never uses what a later one declares, even though compilation within the branch is
+  not required: what is shared comes before what uses it, and a dispatch comes after everything
+  it dispatches to
+- rewrite history when a new commit modifies something introduced by another commit of the same
+  branch
+- tests don't need to pass, nor the code to compile, between commits, as long as the last commit
+  of the branch compiles and its tests succeed
 - commit messages are one line long
 - don't add co-authors

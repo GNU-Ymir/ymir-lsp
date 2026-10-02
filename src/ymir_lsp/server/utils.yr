@@ -1,0 +1,23 @@
+/**
+ * The configuration of the compilations of the server.
+ */
+in utils;
+
+/**
+ * @returns: the versions gyc activates for the target the server runs on
+ */
+pub fn targetVersions()-> [[c8]] {
+    let mut res: [[c8]] = copy ["GNU", "Ymir_Version1"];
+    cte if __version!LittleEndian { res ~= ["LittleEndian"]; }
+    cte if __version!BigEndian    { res ~= ["BigEndian"]; }
+    cte if __version!Linux        { res ~= ["Linux"]; }
+    cte if __version!Posix        { res ~= ["Posix"]; }
+    cte if __version!Windows      { res ~= ["Windows"]; }
+    cte if __version!OSX          { res ~= ["OSX"]; }
+    cte if __version!FreeBSD      { res ~= ["FreeBSD"]; }
+    cte if __version!X86          { res ~= ["X86"]; }
+    cte if __version!x86_64       { res ~= ["x86_64"]; }
+    cte if __version!AArch64      { res ~= ["AArch64"]; }
+    cte if __version!ARM          { res ~= ["ARM"]; }
+    res
+}
