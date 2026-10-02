@@ -1,0 +1,108 @@
+/**
+ * The framing of the messages of the protocol: a `Content-Length` header, a
+ * blank line, the body.
+ */
+in channel;
+
+use ymir_lsp::transport::utils;
+
+use std::{conv, stream};
+
+/**
+ * The messages exchanged over a transport
+ */
+@final
+pub class Channel {
+
+    let dmut _transport: &Transport;
+
+    // The bytes received and not read yet
+    let mut _pending: [c8] = [];
+
+    pub self (dmut transport: &Transport)
+        with _transport = alias transport
+    {}
+
+    /**
+     * @returns: the body of the next message, none at the end of the stream
+     */
+    pub fn receive(mut self)-> ([c8])? {
+        let eof: ([c8])? = none;
+        let mut length: (usize)? = none;
+        loop {
+            let line = if let Ok(l) = self:.readLine() { l } else { break eof; };
+            if (line == "") {
+                if let Ok(n) = length break self:.readExact(n);
+                continue;
+            }
+
+            if let Ok(n) = contentLength(line) {
+                length = n?;
+            }
+        }
+    }
+
+    /**
+     * Send the message of body `body`
+     *
+     * @returns: false if the stream is closed
+     */
+    pub fn send(mut self, body: [c8])-> bool {
+        atomic self {
+            let header = "Content-Length: " ~ std::conv::to!{[c8]} (body.len) ~ "\r\n\r\n";
+            return self._transport:.send(header ~ body);
+        }
+    }
+
+    /**
+     * Close the stream
+     */
+    pub fn close(mut self) {
+        self._transport:.close();
+    }
+
+    /**
+     * @returns: the next header line, without its line break, none at the end of the stream
+     */
+    fn readLine(mut self)-> ([c8])? {
+        let eof: ([c8])? = none;
+        let mut from = 0us;
+        loop {
+            if let Ok(i) = newlineIn(self._pending, from) {
+                let end = if (i > 0us && self._pending[i - 1us] == '\r') { i - 1us } else { i };
+                let line = self._pending[0us .. end];
+                self._pending = self._pending[i + 1us .. $];
+                break line?;
+            }
+
+            from = self._pending.len;
+            let chunk = self._transport:.receive(4096us);
+            if (chunk.len == 0us) break eof;
+            self._pending = self._pending ~ chunk;
+        }
+    }
+
+    /**
+     * @returns: the next `n` bytes, none if the stream ends before
+     */
+    fn readExact(mut self, n: usize)-> ([c8])? {
+        if (self._pending.len >= n) {
+            let res = self._pending[0us .. n];
+            self._pending = self._pending[n .. $];
+            return res?;
+        }
+
+        let dmut s = copy StringStream();
+        s:.write(self._pending);
+        let mut got = self._pending.len;
+        self._pending = [];
+        while (got < n) {
+            let chunk = self._transport:.receive(n - got);
+            if (chunk.len == 0us) return none;
+            s:.write(chunk);
+            got += chunk.len;
+        }
+
+        s[]?
+    }
+}

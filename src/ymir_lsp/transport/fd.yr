@@ -1,0 +1,64 @@
+/**
+ * The transport of the server over file descriptors.
+ */
+in fd;
+
+use etc::runtime::errno;
+use std::net::tcp;
+
+/**
+ * A stream read from and written to file descriptors, a pipe or a socket
+ */
+@final
+pub class FdTransport over Transport {
+
+    let _input: i32;
+
+    let _output: i32;
+
+    // The connection the descriptors belong to, closed with the stream
+    let dmut _stream: (&TcpStream)?;
+
+    pub self (input: i32, output: i32)
+        with _input = input
+        , _output = output
+        , _stream = none
+    {}
+
+    pub self (dmut stream: &TcpStream)
+        with _input = stream.getHandle()
+        , _output = stream.getHandle()
+        , _stream = (alias stream)?
+    {}
+
+    pub over receive(mut self, max: usize)-> [c8] {
+        let dmut buf = core::types::array::allocArray!{c8} (max);
+        loop {
+            let n = cast!i64(sys::read(self._input, alias buf.ptr, max));
+            if (n > 0i64) return buf[0us .. cast!usize(n)];
+            if (n < 0i64 && errno() == ErrnoValue::EINTR) continue;
+            return [];
+        }
+    }
+
+    pub over send(mut self, data: [c8])-> bool {
+        let mut off = 0us;
+        while (off < data.len) {
+            let n = cast!i64(sys::write(self._output, data.ptr + off, data.len - off));
+            if (n <= 0i64) {
+                if (n < 0i64 && errno() == ErrnoValue::EINTR) continue;
+                return false;
+            }
+
+            off += cast!usize(n);
+        }
+
+        true
+    }
+
+    pub over close(mut self) {
+        if let Ok(dmut s) = alias self._stream {
+            s:.dispose();
+        }
+    }
+}

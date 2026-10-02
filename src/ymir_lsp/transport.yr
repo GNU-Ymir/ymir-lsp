@@ -1,0 +1,78 @@
+/**
+ * The streams the server talks to its client through, and the framing of the
+ * messages of the protocol: a `Content-Length` header, a blank line, the body.
+ */
+in transport;
+
+mod ::channel;
+mod ::fd;
+mod ::utils;
+
+use std::net::{addr, tcp};
+
+pub def Channel: channel::Channel;
+pub def FdTransport: fd::FdTransport;
+
+/**
+ * A byte stream to the client
+ */
+@abstract
+pub class Transport {
+
+    prot self () {}
+
+    /**
+     * @returns: at most `max` bytes sent by the client, at least one, none at
+     * the end of the stream
+     */
+    pub fn receive(mut self, max: usize)-> [c8];
+
+    /**
+     * Send `data` to the client
+     *
+     * @returns: false if the stream is closed
+     */
+    pub fn send(mut self, data: [c8])-> bool;
+
+    /**
+     * Close the stream
+     */
+    pub fn close(mut self);
+}
+
+/**
+ * The streams to the client the server is started on
+ */
+pub mod Transport {
+
+    /**
+     * @returns: the stream of the standard input and output of the process;
+     * what is printed on the standard output from then on goes to the error one
+     */
+    pub fn stdio()-> dmut &Transport {
+        let out = sys::dup(1i32);
+        sys::dup2(2i32, 1i32);
+        copy FdTransport(0i32, out)
+    }
+
+    /**
+     * @returns: the stream of the first client connecting to the port `port` of `host`
+     */
+    pub fn listen(host: [c8], port: u16)-> dmut &Transport
+        throws TcpError, std::conv::errors::CastFailure
+    {
+        let dmut server = copy TcpListener(SockAddr(host, port), backlog-> 1u32);
+        let dmut client = server:.accept();
+        copy FdTransport(alias client)
+    }
+
+    /**
+     * @returns: the stream connected to the client listening on the port `port` of `host`
+     */
+    pub fn connect(host: [c8], port: u16)-> dmut &Transport
+        throws TcpError, std::conv::errors::CastFailure
+    {
+        let dmut client = copy TcpStream::connect(SockAddr(host, port));
+        copy FdTransport(alias client)
+    }
+}
