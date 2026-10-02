@@ -1,0 +1,72 @@
+/**
+ * The reading of the configuration of a package and of its dependencies.
+ */
+in utils;
+
+use std::config::_;
+use std::fs::{path, sys};
+
+/**
+ * @returns: the compilation of `file` in the package `dir` configured by
+ * `cfg`, none if it is in neither its source nor its test directory
+ */
+pub fn inPackage(dir: Path, cfg: &Config, file: Path)-> (Unit)? {
+    let srcRoot = Unit::sourceRoot(dir, cfg);
+    let deps = dependencies(dir, dir, cfg, []);
+    let versions = versions(cfg);
+    let prefix = Unit::stdPrefix(dir, cfg);
+
+    let testDir = dir.push(cfg.str("test-dir") ?? "test");
+    if (testDir.isPrefix(file)) {
+        let root = testDir.push((cfg.str("test-root") ?? "__test__") ~ ".yr");
+        return Unit(root, module-> file.removePrefix(testDir).stripExtension(), includes-> deps ~ [srcRoot], versions-> versions, prefix-> prefix)?;
+    }
+
+    let srcDir = srcRoot.parent();
+    if (srcDir.isPrefix(file)) {
+        return Unit(srcRoot, module-> file.removePrefix(srcDir).stripExtension(), includes-> deps, versions-> versions, prefix-> prefix)?;
+    }
+
+    none
+}
+
+/**
+ * @returns: the root files of the dependencies of the package configured by
+ * `cfg`, and of theirs, found in the `.deps` of `top` or of their dependent `dir`
+ */
+pub fn dependencies(top: Path, dir: Path, cfg: &Config, seen: [[c8]])-> [Path] {
+    let mut res: [Path] = [];
+    let mut visited = seen;
+    if let Ok(d: &Dict) = cfg["dependencies"]? {
+        for name in d.sortedKeys() {
+            if (name in visited) continue;
+            visited = visited ~ [name];
+
+            let mut depDir = top.push(DEPS_DIR).push(name);
+            if (!sys::isDir(depDir)) depDir = dir.push(DEPS_DIR).push(name);
+
+            if let Ok(depCfg) = Unit::config(depDir) {
+                let root = Unit::sourceRoot(depDir, depCfg);
+                if (sys::isFile(root)) res = res ~ [root];
+                res = res ~ dependencies(top, depDir, depCfg, visited);
+            }
+        }
+    }
+
+    res
+}
+
+/**
+ * @returns: the versions the `-fversion=` flags of `cfg` activate
+ */
+pub fn versions(cfg: &Config)-> [[c8]] {
+    let flag = "-fversion=";
+    let mut res: [[c8]] = [];
+    for f in cfg.elements("flags") {
+        if let Str(value-> v) = f {
+            if (v.len > flag.len && v[0us .. flag.len] == flag) res = res ~ [v[flag.len .. $]];
+        }
+    }
+
+    res
+}
