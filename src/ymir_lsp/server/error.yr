@@ -1,0 +1,19 @@
+/**
+ * The errors of the requests the server cannot answer.
+ */
+in error;
+
+/**
+ * A request that cannot be answered
+ */
+pub class RpcError over Exception {
+
+    pub let code: RpcCode;
+
+    pub let msg: [c8];
+
+    pub self (code: RpcCode, msg: [c8])
+        with code = code
+        , msg = msg
+    {}
+}
