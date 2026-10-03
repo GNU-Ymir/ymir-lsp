@@ -1,0 +1,235 @@
+/**
+ * The top-level declarations of the modules compiled, searched by name.
+ */
+in symbols;
+
+use ymirc::errors::lsp;
+use ymirc::lexing::word;
+use ymirc::query;
+use ymirc::semantic::symbol;
+use ymirc::syntax::declaration::{block, custom, function, module};
+
+use std::config::data;
+use std::fs::path;
+
+/**
+ * A top-level declaration of a module
+ */
+pub record WorkspaceSymbol {
+
+    pub let name: [c8];
+
+    pub let kind: SymbolKind;
+
+    // The path of the module declaring it
+    pub let container: [c8];
+
+    // The token naming the declaration
+    pub let loc: &Word;
+
+    pub self (name: [c8], kind: SymbolKind, container: [c8], loc: &Word)
+        with name = name
+        , kind = kind
+        , container = container
+        , loc = loc
+    {}
+}
+
+/**
+ * The top-level declarations of the files of the modules compiled, as of
+ * their latest compilation
+ */
+@final
+pub class SymbolTable {
+
+    // The declarations of each file, by its path
+    let dmut _files: [[c8] => [WorkspaceSymbol]] = copy [];
+
+    pub self () {}
+
+    /**
+     * Replace the declarations of the files of the modules declared in the
+     * symbol tree of `root`, and in the modules they use
+     */
+    pub fn insert(mut self, root: &Symbol) {
+        let dmut seen: [[c8] => ()] = copy [];
+        let dmut files: [[c8] => [WorkspaceSymbol]] = copy [];
+        collect(root, alias seen, alias files);
+        for f, syms in files {
+            self._files[f] = copy syms;
+        }
+    }
+
+    /**
+     * @returns: the declarations whose name matches `query`, the ones of the
+     * files of `project` first, by name
+     */
+    pub fn search(self, query: [c8], project: [Path])-> [WorkspaceSymbol] {
+        use std::algorithm::sorting;
+
+        let q = lastName(query);
+        let dmut seen: [[c8] => ()] = copy [];
+        let mut res: [(bool, WorkspaceSymbol)] = [];
+        for f, syms in self._files {
+            let own = isInProject(f, project);
+            for s in syms if matches(q, s.name) {
+                let key = std::conv::to!{[c8]} (s.loc.line) ~ ":" ~ std::conv::to!{[c8]} (s.loc.col) ~ ":" ~ f;
+                if (key in seen) continue;
+                seen[key] = ();
+                res ~= [(own, s)];
+            }
+        }
+
+        let sorted = sort(copy res, |a, b| => {
+            let (ownA, symA) = a;
+            let (ownB, symB) = b;
+            if (ownA != ownB) return ownA;
+            if (symA.name != symB.name) return symA.name < symB.name;
+            symA.container < symB.container
+        });
+
+        let mut out: [WorkspaceSymbol] = [];
+        for e in sorted {
+            let (_, sym) = e;
+            out ~= [sym];
+        }
+
+        out
+    }
+}
+
+/**
+ * The declarations as the `SymbolInformation`s of the protocol
+ */
+pub mod SymbolTable {
+
+    /**
+     * @returns: the `SymbolInformation`s of `syms`
+     */
+    pub fn dump(syms: [WorkspaceSymbol], encoding: PositionEncoding)-> &Config {
+        let dmut res = copy Array();
+        for s in syms {
+            let dmut d = copy Dict();
+            d["name"] = copy Str(s.name);
+            d["kind"] = copy Int(cast!i64(s.kind));
+            d["location"] = lsp::JsonExporting::dumpLocation(lsp::Location(s.loc, s.loc, encoding));
+            if (s.container != "") {
+                d["containerName"] = copy Str(s.container);
+            }
+
+            res:.push(d);
+        }
+
+        res
+    }
+}
+
+/**
+ * @returns: whether `name` matches the fuzzy prefix `query`: it starts with
+ * its first character, and holds the others in order, whatever their case
+ */
+fn matches(query: [c8], name: [c8])-> bool {
+    if (query.len == 0us) return true;
+    if (name.len == 0us || lower(query[0]) != lower(name[0])) return false;
+
+    let mut i = 1us;
+    for c in name[1us .. $] {
+        if (i < query.len && lower(query[i]) == lower(c)) i += 1us;
+    }
+
+    i == query.len
+}
+
+/**
+ * @returns: the name `query` ends with, after its module path
+ */
+fn lastName(query: [c8])-> [c8] {
+    let mut start = 0us;
+    for i in 0us .. query.len {
+        if (query[i] == '.') start = i + 1us;
+        else if (query[i] == ':' && i + 1us < query.len && query[i + 1us] == ':') start = i + 2us;
+    }
+
+    query[start .. $]
+}
+
+fn lower(c: c8)-> c8 {
+    if (c >= 'A' && c <= 'Z') return cast!c8(cast!u8(c) + 32u8);
+    c
+}
+
+/**
+ * @returns: whether the file `file` is one of the packages `project`, the
+ * dependencies of their `.deps` excepted
+ */
+fn isInProject(file: [c8], project: [Path])-> bool {
+    let p = Path(file);
+    for dir in project {
+        if (dir.isPrefix(p) && !dir.push(".deps").isPrefix(p)) return true;
+    }
+
+    false
+}
+
+/**
+ * Collect in `files` the declarations of the modules of `sym`, and of the
+ * ones they use, a module once, by file, a file being listed even when it
+ * declares nothing
+ */
+fn collect(sym: &Symbol, dmut seen: [[c8] => ()], dmut files: [[c8] => [WorkspaceSymbol]]) {
+    let container = sym.path.toStr(withTemplates-> false);
+    let key = container ~ "@" ~ sym.loc.filename;
+    if (key in seen) return;
+    seen[key] = ();
+
+    if (!sym.loc.isEof && sym.loc.filename != "" && sym.loc.filename !in files) {
+        files[sym.loc.filename] = [];
+    }
+
+    for s in sym.allLocalSymbols(protection-> Protection::PRIVATE) {
+        if (s of ModuleSymbol) {
+            collect(s, alias seen, alias files);
+            continue;
+        }
+
+        if (s.loc.isEof || s.loc.filename == "") continue;
+        if let Ok(_) = s.templateSource continue;
+        if let Ok(kind) = kindOf(s) {
+            let decl = WorkspaceSymbol(s.loc.str, kind, container, s.loc);
+            files[s.loc.filename] = (files[s.loc.filename] ?? []) ~ [decl];
+        }
+    }
+
+    for u in sym.used {
+        collect(u, alias seen, alias files);
+    }
+}
+
+/**
+ * @returns: the kind of the top-level declaration of `sym`, none if it is
+ * not one: a type, a function, a global or a `def`, an alias of a type
+ * being a class
+ */
+fn kindOf(sym: &Symbol)-> (SymbolKind)? {
+    match sym {
+        c: &ClassSymbol    => return (if (c.isStruct) { SymbolKind::STRUCT } else { SymbolKind::CLASS })?;
+        f: &FunctionSymbol => return (if (f.isMethod) { none } else { SymbolKind::FUNCTION? });
+        EnumSymbol()       => return SymbolKind::ENUM?;
+        TraitSymbol()      => return SymbolKind::INTERFACE?;
+        UnionSymbol()      => return SymbolKind::STRUCT?;
+        GlobalVarSymbol()  => return SymbolKind::VARIABLE?;
+        d: &DefSymbol      => return (if (d.decl.isValue) { SymbolKind::CONSTANT } else { SymbolKind::CLASS })?;
+        MacroSymbol()      => return SymbolKind::FUNCTION?;
+        t: &TemplateSymbol => match t.decl.decl {
+            CtorDecl()     => return none;
+            FunctionDecl() => return (if (t.isMethod) { none } else { SymbolKind::FUNCTION? });
+            c: &TypeDecl   => return (if (c.isRecord || c.isEntity) { SymbolKind::STRUCT } else { SymbolKind::CLASS })?;
+            TraitDecl()    => return SymbolKind::INTERFACE?;
+            EnumDecl()     => return SymbolKind::ENUM?;
+            UnionDecl()    => return SymbolKind::STRUCT?;
+            _              => return SymbolKind::FUNCTION?;
+        }
+    }
+
+    none
+}
