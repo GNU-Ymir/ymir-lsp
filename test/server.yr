@@ -166,6 +166,58 @@ __test a_session_finds_the_declarations_of_the_packages_of_the_workspace {
     assert("Cube" in after && "Square" !in after && "Color" !in after && "main" in after);
 }
 
+fn published(msgs: [&Config], uri: [c8])-> usize {
+    let mut res = 0us;
+    for m in msgs if m.str("method") ?? "" == "textDocument/publishDiagnostics" && m.str("params", "uri") ?? "" == uri {
+        res += 1us;
+    }
+
+    res
+}
+
+fn edited(uri: [c8], text: [c8])-> [c8] {
+    notification("textDocument/didChange", "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(uri)) ~ ",\"version\":2},\"contentChanges\":[{\"text\":" ~ std::config::json::dump(copy Str(text)) ~ "}]}")
+}
+
+__test a_change_checks_again_only_the_documents_reading_it {
+    let dir = env::currentDir().push("test_resources/server");
+    let shapes = Document::ofPath(dir.push("pkg/src/shapes.yr").toStr());
+    let main = Document::ofPath(dir.push("pkg/src/main.yr").toStr());
+    let lib = Document::ofPath(dir.push("lib/src/__lib__.yr").toStr());
+    let texts = copy [
+        (shapes, "in shapes;\n\npub fn one ()-> i32 {\n    1\n}\n"),
+        (main, "mod .shapes;\n\nuse shapes;\n\nfn main () {\n    let _ = one ();\n}\n"),
+        (lib, "in __lib__;\n\npub fn two ()-> i32 {\n    2\n}\n")
+    ];
+
+    let mut input = request(1i64, "initialize", "{\"capabilities\":{}}") ~ notification("initialized", "{}");
+    for t in texts {
+        let (uri, text) = t;
+        input = input ~ notification("textDocument/didOpen", "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(uri)) ~ ",\"languageId\":\"ymir\",\"version\":1,\"text\":" ~ std::config::json::dump(copy Str(text)) ~ "}}");
+    }
+
+    let docs = copy ["{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(t._0)) ~ "}}" for t in texts];
+    input = input ~ request(2i64, "textDocument/documentSymbol", docs[0])
+        ~ request(3i64, "textDocument/documentSymbol", docs[1])
+        ~ request(4i64, "textDocument/documentSymbol", docs[2])
+        ~ edited(texts[2]._0, texts[2]._1 ~ "\n")
+        ~ request(5i64, "textDocument/documentSymbol", docs[2])
+        ~ request(6i64, "textDocument/documentSymbol", docs[0])
+        ~ edited(texts[0]._0, texts[0]._1 ~ "\n")
+        ~ request(7i64, "textDocument/documentSymbol", docs[1])
+        ~ request(8i64, "shutdown", "null")
+        ~ notification("exit", "null");
+
+    let (msgs, code) = session(input);
+    assert(code == 0);
+    assert(names(response(msgs, 6i64).elements("result")) == ["one"]);
+
+    // the package of `lib` reads nothing of the other one, `main` reads `shapes`
+    assert(published(msgs, lib) == 2us);
+    assert(published(msgs, shapes) == 1us);
+    assert(published(msgs, main) == 2us);
+}
+
 /**
  * @returns: `text` rewritten by the `TextEdit`s of the protocol `edits`, its
  * characters being bytes

@@ -1,0 +1,9 @@
+name = "lib"
+type = "library"
+version = "0.1.0"
+license = "GPL-v3"
+authors = ["Emile Cadorel <ecadorel@gmail.com>"]
+description = "A package no other one reads"
+
+[registry]
+local = "/nonexistent/lib"
