@@ -76,6 +76,10 @@ pub class Server {
     // Moved forward by every change of an open document
     let mut _generation: u64 = 0u64;
 
+    // The latest change of the documents, by path, and whether the document is
+    // in no package, any compilation being able to read it then
+    let dmut _changes: [[c8] => (u64, bool)] = copy [];
+
     let mut _encoding: PositionEncoding = PositionEncoding::UTF16;
 
     let mut _initialized: bool = false;
@@ -484,7 +488,29 @@ pub class Server {
     fn change(mut self, doc: Document) {
         self._docs[doc.uri] = doc;
         self._dirty[doc.uri] = ();
+        self:.changed(doc.path);
+    }
+
+    /**
+     * Move the generation forward, as the latest change of the document `path`
+     */
+    fn changed(mut self, path: [c8]) {
         self._generation += 1u64;
+        if (path == "") return;
+
+        let lone = if let Ok(c) = self._changes[path] { c._1 } else { Unit::compiling(Path(path)).module.isEmpty() };
+        self._changes[path] = (self._generation, lone);
+    }
+
+    /**
+     * @returns: whether a document `unit` reads changed after the change `generation`
+     */
+    fn changedSince(self, unit: Unit, generation: u64)-> bool {
+        for path, c in self._changes {
+            if (c._0 > generation && (c._1 || unit.sees(Path(path)))) return true;
+        }
+
+        false
     }
 
     fn close(mut self, uri: [c8]) {
@@ -492,7 +518,7 @@ pub class Server {
             self._docs:.remove(uri);
             self._compiled:.remove(uri);
             self._dirty:.remove(uri);
-            self._generation += 1u64;
+            self:.changed(doc.path);
 
             if (doc.path != "") {
                 let key = Unit::compiling(Path(doc.path)).key();
@@ -541,11 +567,12 @@ pub class Server {
 
     /**
      * @returns: the compilation of the open document `uri` after the latest
-     * change, none if it is not a file, or if its compilation was cancelled
+     * change of the documents it reads, none if it is not a file, or if its
+     * compilation was cancelled
      */
     fn compiled(mut self, uri: [c8])-> (Compiled)? {
         let doc = if let Ok(d) = self._docs[uri] { d } else { return none; };
-        if let Ok(c) = self._compiled[uri] && (c.generation == self._generation) {
+        if let Ok(c) = self._compiled[uri] && (!self.changedSince(c.unit, c.generation)) {
             self._dirty:.remove(uri);
             return c?;
         }
@@ -568,7 +595,7 @@ pub class Server {
 
         session:.exit();
 
-        let c = Compiled(p, doc.text, self._generation);
+        let c = Compiled(p, unit, doc.text, self._generation);
         self._compiled[uri] = c;
         self._dirty:.remove(uri);
         self:.publish(uri, published);
