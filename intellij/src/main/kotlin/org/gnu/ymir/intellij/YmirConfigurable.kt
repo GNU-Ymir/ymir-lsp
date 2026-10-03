@@ -7,7 +7,7 @@ import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.panel
 
 /**
- * The page of the settings under Languages & Frameworks, choosing the language server.
+ * The page of the settings under Languages & Frameworks, choosing the language server, gyllir and gdb.
  */
 class YmirConfigurable : BoundConfigurable("Ymir") {
 
@@ -26,6 +26,13 @@ class YmirConfigurable : BoundConfigurable("Ymir") {
                     .bindText(settings::gyllirPath)
                     .align(AlignX.FILL)
                     .comment("The path of <code>gyllir</code>, or its name to look it up in the PATH.")
+            }
+            row("GDB:") {
+                textField()
+                    .bindText(settings::gdbPath)
+                    .align(AlignX.FILL)
+                    .comment("The path of <code>gdb</code>, 14 or later, or its name to look it up in the PATH. " +
+                             "Debugs the programs of the Gyllir run configurations.")
             }
         }
     }
