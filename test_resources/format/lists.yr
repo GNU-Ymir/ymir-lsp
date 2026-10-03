@@ -1,0 +1,8 @@
+in lists;
+
+fn calls() {
+    let c = ValueValidation::validateCatcher(alias context, catcher, tryBlock, tryBlock.throwers, ref errors, more, again);
+    let s = copy ModuleSymbol(m.loc, importLoc-> EOF_WORD, comm-> "", isExtern-> false, isTrusted-> true, name-> something);
+    let d = ValueValidation::validateTheLongestFunctionNameOfTheWholeCompilerAndMore(firstArgumentWithAVeryLongNameAgain, second, third);
+    let a = [1, 2, 3];
+}

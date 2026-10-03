@@ -1,0 +1,397 @@
+/**
+ * The tokens of a source file, as the lexer of ymirc cuts it, and the
+ * comments and line breaks between them.
+ */
+in source;
+
+use ymirc::errors;
+use ymirc::lexing::{lexer, tokens, word};
+
+/**
+ * A comment between two tokens
+ */
+pub record Comment {
+
+    // The comment as written, its continuation lines indented relatively to
+    // its first one
+    pub let text: [c8];
+
+    // The line breaks between it and what precedes it
+    pub let breaks: u32;
+
+    // Whether it is a `//` comment, that a line break ends
+    pub let isLine: bool;
+
+    // Whether it is text the lexer skipped, as the inactive branch of a
+    // `#if`, written as it is on its own lines
+    pub let isRaw: bool;
+
+    pub self (text: [c8], breaks: u32, isLine: bool, isRaw: bool = false)
+        with text = text
+        , breaks = breaks
+        , isLine = isLine
+        , isRaw = isRaw
+    {}
+}
+
+/**
+ * The whitespace and comments between two tokens
+ */
+pub record Gap {
+
+    pub let comments: [Comment];
+
+    // The line breaks between the last comment, or the previous token, and the next token
+    pub let breaks: u32;
+
+    pub self (comments: [Comment] = [], breaks: u32 = 0u32)
+        with comments = comments
+        , breaks = breaks
+    {}
+
+    /**
+     * @returns: the line breaks before the first comment, or the next token
+     */
+    pub fn leading(self)-> u32 {
+        if (self.comments.len != 0us) return self.comments[0us].breaks;
+        self.breaks
+    }
+}
+
+/**
+ * The tokens of a source file
+ */
+@final
+pub class Source {
+
+    pub let text: [c8];
+
+    pub let words: [&Word];
+
+    // The offset of the first byte of each token, and of the byte following it
+    pub let starts: [usize];
+    pub let ends: [usize];
+
+    // The index of the bracket closing or opening each bracket, the token itself otherwise
+    pub let partners: [usize];
+
+    // The gap before each token, and the one ending the file
+    pub let gaps: [Gap];
+
+    // The token of each offset a token starts at
+    let _bySeek: [usize => usize];
+
+    pub self (text: [c8], words: [&Word], starts: [usize], ends: [usize], partners: [usize], gaps: [Gap])
+        with text = text
+        , words = words
+        , starts = starts
+        , ends = ends
+        , partners = partners
+        , gaps = gaps
+        , _bySeek = index(starts)
+    {}
+
+    @field
+    pub fn len(self)-> usize {
+        self.words.len
+    }
+
+    /**
+     * @returns: the text of the token `i`, as written
+     */
+    pub fn at(self, i: usize)-> [c8] {
+        self.text[self.starts[i] .. self.ends[i]]
+    }
+
+    /**
+     * @returns: the token starting where `w` does, none if none does
+     */
+    pub fn find(self, w: &Word)-> (usize)? {
+        if (w.isEof) return none;
+        self._bySeek[w.seek]
+    }
+
+    /**
+     * @returns: whether the token `i` is the one written `s`
+     */
+    pub fn isTok(self, i: usize, s: [c8])-> bool {
+        i < self.words.len && self.at(i) == s
+    }
+}
+
+/**
+ * The tokens of a source file
+ */
+pub mod Source {
+
+    /**
+     * @returns: the tokens of `text`, the source of the file `path`
+     * @throws:
+     *   - ErrorMsg: when the lexer fails, or when the text between two tokens
+     *     is not only whitespace and comments
+     */
+    pub fn read(path: [c8], text: [c8])-> &Source
+        throws ErrorMsg
+    {
+        let words = readWords(path, text);
+        let starts = copy [startOf(w, text) for w in words];
+        let ends = copy [endOf(w, text) for w in words];
+        copy Source(text, words, starts, ends, pair(text, starts, ends), readGaps(text, starts, ends))
+    }
+}
+
+fn readWords(path: [c8], text: [c8])-> [&Word]
+    throws ErrorMsg
+{
+    let dmut lex = copy SrcLexer(path, text);
+    let mut res: [&Word] = [];
+    loop {
+        let (w, _) = lex:.next();
+        if (w.isEof) break;
+        res ~= [w];
+    }
+
+    res
+}
+
+/**
+ * @returns: the offset of the first byte of the token `w`, its opening quote included
+ */
+fn startOf(w: &Word, text: [c8])-> usize {
+    if let s: &StringWord = w return s.open.seek;
+    if (w of NumericWord || w of FloatWord) {
+        let mut start = w.seek;
+        while (start > 0us && text[start - 1us] == '_') { start -= 1us; }
+        return start;
+    }
+
+    if (w.seek > 0us && w.seek + w.str.len < text.len && text[w.seek - 1us] == '`' && text[w.seek + w.str.len] == '`') {
+        return w.seek - 1us;
+    }
+
+    w.seek
+}
+
+/**
+ * @returns: the offset of the byte following the token `w`, its suffix and
+ * closing quote included
+ */
+fn endOf(w: &Word, text: [c8])-> usize {
+    match w {
+        s: &StringWord => {
+            let c = s.close;
+            let mut end = c.seek + c.str.len;
+            if (c.seek >= c.str.len && c.seek <= text.len && text[c.seek - c.str.len .. c.seek] == c.str) end = c.seek;
+            if (!s.suffix.isEof) end = s.suffix.seek + s.suffix.str.len;
+            return end;
+        }
+        n: &NumericWord => {
+            if (!n.suffix.isEof) return n.suffix.seek + n.suffix.str.len;
+        }
+        f: &FloatWord => {
+            let mut end = f.seek + f.str.len;
+            for p in copy [f.dot, f.dec, f.exp, f.sign, f.suffix] if !p.isEof && p.seek + p.str.len > end {
+                end = p.seek + p.str.len;
+            }
+
+            return end;
+        }
+    }
+
+    if (w.seek > 0us && text[w.seek - 1us] == '`' && startOf(w, text) + 1us == w.seek) return w.seek + w.str.len + 1us;
+    w.seek + w.str.len
+}
+
+fn pair(text: [c8], starts: [usize], ends: [usize])-> [usize] {
+    let dmut res: [usize] = copy [i for i in 0us .. starts.len];
+    let mut open: [usize] = [];
+    for i in 0us .. starts.len {
+        let s = text[starts[i] .. ends[i]];
+        if (s == Tokens::LPAR || s == Tokens::LCRO || s == Tokens::LCRO_AND || s == Tokens::LACC) {
+            open ~= [i];
+        } else if (s == Tokens::RPAR || s == Tokens::RCRO || s == Tokens::RACC) {
+            if (open.len != 0us) {
+                let o = open[$ - 1us];
+                open = open[0us .. $ - 1us];
+                res[o] = i;
+                res[i] = o;
+            }
+        }
+    }
+
+    res
+}
+
+fn index(starts: [usize])-> [usize => usize] {
+    let dmut res: [usize => usize] = copy [];
+    for i in 0us .. starts.len {
+        res[starts[i]] = i;
+    }
+
+    res
+}
+
+fn readGaps(text: [c8], starts: [usize], ends: [usize])-> [Gap]
+    throws ErrorMsg
+{
+    let mut res: [Gap] = [];
+    for i in 0us ... starts.len {
+        let s = if (i == 0us) { 0us } else { ends[i - 1us] };
+        let e = if (i == starts.len) { text.len } else { starts[i] };
+        res ~= [readGap(text, s, e)];
+    }
+
+    res
+}
+
+/**
+ * @returns: the comments of `text[s .. e]`, and the line breaks around them,
+ * the text that is neither whitespace nor comments being kept as it is
+ */
+fn readGap(text: [c8], s: usize, e: usize)-> Gap
+    throws ErrorMsg
+{
+    let mut lineStart = true;
+    for i in s .. e {
+        let c = text[i];
+        if (c == '#' && lineStart) return rawGap(text, s, e);
+        if (c == '\n') lineStart = true;
+        else if (c != ' ' && c != '\t' && c != '\r') lineStart = false;
+    }
+
+    let mut comments: [Comment] = [];
+    let mut breaks = 0u32;
+    let mut i = s;
+    while (i < e) {
+        let c = text[i];
+        if (c == '\n') {
+            breaks += 1u32;
+            i += 1us;
+        } else if (c == ' ' || c == '\t' || c == '\r') {
+            i += 1us;
+        } else if (c == '/' && i + 1us < e && text[i + 1us] == '/') {
+            let mut j = i;
+            while (j < e && text[j] != '\n') { j += 1us; }
+            comments ~= [Comment(trimEnd(text[i .. j]), breaks, isLine-> true)];
+            breaks = 0u32;
+            i = j;
+        } else if (c == '/' && i + 1us < e && text[i + 1us] == '*') {
+            let j = closeOf(text, i, e);
+            comments ~= [Comment(reindent(text, i, j), breaks, isLine-> false)];
+            breaks = 0u32;
+            i = j;
+        } else {
+            return rawGap(text, s, e);
+        }
+    }
+
+    Gap(comments-> comments, breaks-> breaks)
+}
+
+/**
+ * @returns: the gap `text[s .. e]` as a text written as it is, between the
+ * line breaks around it
+ */
+fn rawGap(text: [c8], s: usize, e: usize)-> Gap {
+    let mut a = s;
+    let mut before = 0u32;
+    while (a < e && (text[a] == ' ' || text[a] == '\t' || text[a] == '\r' || text[a] == '\n')) {
+        if (text[a] == '\n') before += 1u32;
+        a += 1us;
+    }
+
+    let mut b = e;
+    let mut after = 0u32;
+    while (b > a && (text[b - 1us] == ' ' || text[b - 1us] == '\t' || text[b - 1us] == '\r' || text[b - 1us] == '\n')) {
+        if (text[b - 1us] == '\n') after += 1u32;
+        b -= 1us;
+    }
+
+    if (a == b) return Gap(breaks-> before);
+    let mut lines = "";
+    let mut start = a;
+    for k in a ... b {
+        if (k == b || text[k] == '\n') {
+            if (lines.len != 0us) lines = lines ~ "\n";
+            lines = lines ~ trimEnd(text[start .. k]);
+            start = k + 1us;
+        }
+    }
+
+    Gap(comments-> copy [Comment(lines, before, isLine-> true, isRaw-> true)], breaks-> after)
+}
+
+/**
+ * @returns: the offset following the end of the block comment opening at `i`,
+ * the nested ones included
+ */
+fn closeOf(text: [c8], i: usize, e: usize)-> usize
+    throws ErrorMsg
+{
+    let mut depth = 0us;
+    let mut j = i;
+    while (j + 1us < e) {
+        if (text[j] == '/' && text[j + 1us] == '*') {
+            depth += 1us;
+            j += 2us;
+        } else if (text[j] == '*' && text[j + 1us] == '/') {
+            depth -= 1us;
+            j += 2us;
+            if (depth == 0us) return j;
+        } else {
+            j += 1us;
+        }
+    }
+
+    throw copy ErrorMsg::fatal(EOF_WORD, "unterminated comment");
+}
+
+/**
+ * @returns: the block comment `text[i .. j]`, each continuation line indented
+ * relatively to the column of its first one, trailing spaces removed
+ */
+fn reindent(text: [c8], i: usize, j: usize)-> [c8] {
+    let mut lineStart = i;
+    while (lineStart > 0us && text[lineStart - 1us] != '\n') { lineStart -= 1us; }
+    let col = width(text[lineStart .. i]);
+
+    let mut res = "";
+    let mut start = i;
+    let mut first = true;
+    for k in i ... j {
+        if (k == j || text[k] == '\n') {
+            let line = text[start .. k];
+            if (first) {
+                res = trimEnd(line);
+                first = false;
+            } else {
+                let mut n = 0us;
+                while (n < line.len && n < col && (line[n] == ' ' || line[n] == '\t')) { n += 1us; }
+                res = res ~ "\n" ~ trimEnd(line[n .. $]);
+            }
+
+            start = k + 1us;
+        }
+    }
+
+    res
+}
+
+fn trimEnd(s: [c8])-> [c8] {
+    let mut e = s.len;
+    while (e > 0us && (s[e - 1us] == ' ' || s[e - 1us] == '\t' || s[e - 1us] == '\r')) { e -= 1us; }
+    s[0us .. e]
+}
+
+/**
+ * @returns: the number of characters of `s`, the bytes continuing a UTF-8
+ * sequence aside
+ */
+pub fn width(s: [c8])-> usize {
+    let mut n = 0us;
+    for c in s {
+        if ((cast!u8(c) & 0xC0u8) != 0x80u8) n += 1us;
+    }
+
+    n
+}

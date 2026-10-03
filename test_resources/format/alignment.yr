@@ -1,0 +1,31 @@
+in alignment;
+
+pub def GYLLIR_CONFIG = "gyllir.toml";
+pub def DEPS_DIR = ".deps";
+
+def Channel: channel::Channel;
+def SymbolTable: symbols::SymbolTable;
+
+pub enum Protection
+| PRIVATE = 0
+| PROTECTED = 1
+| PUBLIC = 2;
+
+fn lets() {
+    let uri = self.uriOf(params) ?? "";
+    let line = params.int("position", "line");
+    let character = params.int("position", "character");
+
+    let alone = 1;
+}
+
+fn arms(method: [c8])-> i32 {
+    match method {
+        "shutdown" => 1
+        "textDocument/hover" => 2
+        "workspace/symbol" => 3
+        _ => {
+            throw copy RpcError();
+        }
+    }
+}

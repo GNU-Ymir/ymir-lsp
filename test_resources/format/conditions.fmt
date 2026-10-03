@@ -1,0 +1,23 @@
+in conditions;
+
+fn chains(x: i32)-> i32 {
+    let a = if (x > 0) { 1 } else { 2 };
+    let m = if let Ok(m) = msg.str("method") { m } else {
+        return none;
+    };
+
+    if let Ok(p) = listen {
+        Transport::listen(host, p)
+    } else if let Ok(p) = socket {
+        Transport::connect(host, p)
+    } else {
+        Transport::stdio()
+    }
+
+    if (x == 0) return 0;
+    if (x == 1)
+        return someFunctionWithAVeryLongName(withSomeArguments, thatMakeTheLineOverflowTheMaximalWidthOfALineOfCode);
+    while (x > 0) { x -= 1; }
+    for i in 0 .. 10 { foo(i); }
+    0
+}

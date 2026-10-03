@@ -1,0 +1,8 @@
+in strings;
+
+fn messages(method: [c8]) {
+    throw copy RpcError(RpcCode::INVALID_REQUEST, "the server is shut down and does not answer any request anymore, whatever it is asked, and whoever asks it");
+    match method {
+        "a very long pattern that cannot be split since it is matched against the method of the request" => {}
+    }
+}

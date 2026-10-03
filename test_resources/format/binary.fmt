@@ -1,0 +1,12 @@
+in binary;
+
+fn chains() {
+    if (self._received.get() > 0 && self._dirty.len == 0us && self._unindexed.len == 0us && self._compiling.isEmpty()
+        && !self._shutdown) {
+        foo();
+    }
+
+    let x = (a + b) * c;
+    let y = first ~ ", " ~ second ~ ", " ~ third ~ ", " ~ fourth ~ ", " ~ fifth ~ ", " ~ sixth ~ ", " ~ seventh ~ ", "
+            ~ eighth;
+}

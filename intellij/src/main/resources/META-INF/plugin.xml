@@ -5,8 +5,8 @@
 
     <description><![CDATA[
     Support of the <a href="https://github.com/GNU-Ymir">Ymir</a> language: highlighting of the
-    <code>.yr</code> files, and the diagnostics, hover, navigation, outline, completion and
-    workspace symbols of the <code>ymir-lsp</code> language server.
+    <code>.yr</code> files, and the diagnostics, hover, navigation, outline, completion,
+    workspace symbols and formatting of the <code>ymir-lsp</code> language server.
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
@@ -42,4 +42,14 @@
         </server>
         <fileNamePatternMapping patterns="*.yr" serverId="ymir" languageId="ymir"/>
     </extensions>
+
+    <actions>
+        <action id="Ymir.ReformatCode"
+                class="org.gnu.ymir.intellij.format.YmirReformatAction"
+                text="Reformat Ymir Code"
+                description="Rewrite the Ymir file, or the declarations of its selection, in its canonical form">
+            <keyboard-shortcut keymap="$default" first-keystroke="meta alt L"/>
+            <add-to-group group-id="CodeFormatGroup" anchor="after" relative-to-action="ReformatCode"/>
+        </action>
+    </actions>
 </idea-plugin>

@@ -1,0 +1,17 @@
+/**
+ * A module
+ */
+in comments;
+
+// The first function
+fn first() { // its body
+    let x = 1; // the value
+    /* a block
+       comment */
+    foo(x, // the first
+        y);
+
+    // a comment before the end
+}
+
+fn second() {}

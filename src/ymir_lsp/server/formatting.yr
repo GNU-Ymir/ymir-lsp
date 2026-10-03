@@ -1,0 +1,102 @@
+/**
+ * The edits of the canonical form of a document, as the protocol writes them.
+ */
+in formatting;
+
+use ymirc::errors::lsp;
+use ymirc::query;
+
+use std::config::data;
+
+/**
+ * The offsets of the lines of a text, and the positions of the protocol they are at
+ */
+pub record Lines {
+
+    let _text: [c8];
+
+    // The offset each line starts at
+    let _starts: [usize];
+
+    let _encoding: PositionEncoding;
+
+    pub self (text: [c8], encoding: PositionEncoding)
+        with _text = text
+        , _starts = lineStarts(text)
+        , _encoding = encoding
+    {}
+
+    /**
+     * @returns: the offset of the position `line`, `character`
+     */
+    pub fn offsetOf(self, line: u64, character: u64)-> usize {
+        let (l, col) = QueryExporting::fromPosition(self._text, line, character, self._encoding);
+        let i = cast!usize(l - 1u64);
+        if (i >= self._starts.len) return self._text.len;
+        self._starts[i] + cast!usize(col - 1u64)
+    }
+
+    /**
+     * @returns: the position of the offset `offset`
+     */
+    pub fn positionOf(self, offset: usize)-> &Config {
+        let mut lo = 0us;
+        let mut hi = self._starts.len;
+        while (lo + 1us < hi) {
+            let mid = (lo + hi) / 2us;
+            if (self._starts[mid] <= offset) lo = mid;
+            else hi = mid;
+        }
+
+        let dmut res = copy Dict();
+        res["line"] = copy Int(cast!i64(lo));
+        res["character"] = copy Int(cast!i64(units(self._text[self._starts[lo] .. offset], self._encoding)));
+        res
+    }
+
+    /**
+     * @returns: the `TextEdit`s of the protocol of `edits`
+     */
+    pub fn dump(self, edits: [format::TextEdit])-> &Config {
+        let dmut res = copy Array();
+        for e in edits {
+            let dmut range = copy Dict();
+            range["start"] = self.positionOf(e.start);
+            range["end"] = self.positionOf(e.end);
+
+            let dmut edit = copy Dict();
+            edit["range"] = range;
+            edit["newText"] = copy Str(e.text);
+            res:.push(edit);
+        }
+
+        res
+    }
+}
+
+fn lineStarts(text: [c8])-> [usize] {
+    let mut res: [usize] = copy [0us];
+    for i in 0us .. text.len if text[i] == '\n' {
+        res ~= [i + 1us];
+    }
+
+    res
+}
+
+/**
+ * @returns: the number of units of `encoding` of `txt`
+ */
+fn units(txt: [c8], encoding: PositionEncoding)-> u64 {
+    if (encoding == PositionEncoding::UTF8) return cast!u64(txt.len);
+
+    // a code point encoded on four bytes is a surrogate pair
+    let mut res = 0u64;
+    for c in txt {
+        let b = cast!u8(c);
+        if ((b & 0xC0u8) != 0x80u8) {
+            res += if (b >= 0xF0u8) { 2u64 } else { 1u64 };
+        }
+    }
+
+    res
+}

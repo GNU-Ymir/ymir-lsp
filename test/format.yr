@@ -1,0 +1,70 @@
+in format;
+
+use ymir_lsp::format;
+
+use std::env;
+use std::fs::{errors, sys};
+
+def CASES = ["alignment", "binary", "comments", "conditions", "declarations", "lists", "spacing", "strings", "uses"];
+
+/**
+ * @returns: the source of the case `name` of the resources, and its canonical form
+ */
+fn case(name: [c8])-> ([c8], [c8])
+    throws FsError
+{
+    let dir = env::currentDir().push("test_resources/format");
+    (sys::readFile(dir.push(name ~ ".yr")), sys::readFile(dir.push(name ~ ".fmt")))
+}
+
+/**
+ * @returns: `text` rewritten by `edits`
+ */
+fn applied(text: [c8], edits: [TextEdit])-> [c8] {
+    let mut res = "";
+    let mut from = 0us;
+    for e in edits {
+        res = res ~ text[from .. e.start] ~ e.text;
+        from = e.end;
+    }
+
+    res ~ text[from .. $]
+}
+
+__test a_source_is_rewritten_in_its_canonical_form {
+    for name in CASES {
+        let (src, expected) = case(name);
+        let f = format::format(name ~ ".yr", src);
+        assert(f.text == expected, name);
+        assert(applied(src, f.edits) == expected, name);
+    }
+}
+
+__test the_canonical_form_is_its_own {
+    for name in CASES {
+        let (_, expected) = case(name);
+        let f = format::format(name ~ ".yr", expected);
+        assert(f.text == expected && f.edits.len == 0us, name);
+    }
+}
+
+__test a_range_rewrites_the_declarations_it_is_in {
+    let src = "in r;\n\nfn  first() {\n  foo();\n}\n\nfn  second() {\n  bar();\n    baz();\n}\n";
+    let start = 50us; // in `bar();`
+    let edits = format::formatRange("r.yr", src, start, start + 3us);
+    assert(applied(src, edits) == "in r;\n\nfn  first() {\n  foo();\n}\n\nfn second() {\n    bar();\n    baz();\n}\n");
+
+    // a range over both rewrites both
+    assert(applied(src, format::formatRange("r.yr", src, 10us, 52us)) == format::format("r.yr", src).text);
+}
+
+__test a_source_that_does_not_parse_has_no_canonical_form {
+    let mut msg = "";
+    {
+        format::format("x.yr", "fn main( {\n");
+    } catch {
+        err: &FormatError => msg = err.msg;
+    }
+
+    assert(msg == "the file does not parse");
+}

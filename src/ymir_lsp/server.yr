@@ -9,10 +9,11 @@ in server;
 mod ::code;
 mod ::compiled;
 mod ::error;
+mod ::formatting;
 mod ::symbols;
 mod ::utils;
 
-use ymir_lsp::{document, transport, unit};
+use ymir_lsp::{document, format, transport, unit};
 
 use ymirc::{parser, query, session};
 use ymirc::errors;
@@ -32,6 +33,7 @@ pub def DEBOUNCE = 250u64;
 
 pub def Compiled: compiled::Compiled;
 pub def RpcCode: code::RpcCode;
+pub def Lines: formatting::Lines;
 pub def RpcError: error::RpcError;
 pub def SymbolTable: symbols::SymbolTable;
 
@@ -206,6 +208,8 @@ pub class Server {
             "textDocument/documentSymbol" => self:.documentSymbol(params)
             "textDocument/completion"     => self:.completion(params)
             "textDocument/codeAction"     => self:.codeAction(params)
+            "textDocument/formatting"     => self.formatting(params)
+            "textDocument/rangeFormatting" => self.rangeFormatting(params)
             "workspace/symbol"            => self.workspaceSymbol(params)
             _ => throw copy RpcError(RpcCode::METHOD_NOT_FOUND, "unknown method " ~ method);
         }
@@ -304,6 +308,8 @@ pub class Server {
         caps["documentSymbolProvider"] = copy Bool(true);
         caps["completionProvider"] = completion;
         caps["codeActionProvider"] = actions;
+        caps["documentFormattingProvider"] = copy Bool(true);
+        caps["documentRangeFormattingProvider"] = copy Bool(true);
         caps["workspaceSymbolProvider"] = copy Bool(true);
 
         let dmut info = copy Dict();
@@ -373,6 +379,38 @@ pub class Server {
     }
 
     /**
+     * @returns: the edits rewriting the document of the request in its canonical form
+     */
+    fn formatting(self, params: &Config)-> &Config
+        throws RpcError
+    {
+        let doc = self.document(params);
+        {
+            return Lines(doc.text, self._encoding).dump(format::format(doc.path, doc.text).edits);
+        } catch {
+            err: &FormatError => throw copy RpcError(RpcCode::REQUEST_FAILED, err.msg);
+        }
+    }
+
+    /**
+     * @returns: the edits rewriting in their canonical form the declarations
+     * of the range of the request
+     */
+    fn rangeFormatting(self, params: &Config)-> &Config
+        throws RpcError
+    {
+        let doc = self.document(params);
+        let lines = Lines(doc.text, self._encoding);
+        let start = lines.offsetOf(cast!u64(params.int("range", "start", "line") ?? 0i64), cast!u64(params.int("range", "start", "character") ?? 0i64));
+        let end = lines.offsetOf(cast!u64(params.int("range", "end", "line") ?? 0i64), cast!u64(params.int("range", "end", "character") ?? 0i64));
+        {
+            return lines.dump(format::formatRange(doc.path, doc.text, start, end));
+        } catch {
+            err: &FormatError => throw copy RpcError(RpcCode::REQUEST_FAILED, err.msg);
+        }
+    }
+
+    /**
      * @returns: the quick fixes of the diagnostics of the range, carried in their `data`
      */
     fn codeAction(mut self, params: &Config)-> &Config {
@@ -419,6 +457,17 @@ pub class Server {
             }
         }
 
+        throw copy RpcError(RpcCode::INVALID_PARAMS, "the document " ~ uri ~ " is not open");
+    }
+
+    /**
+     * @returns: the open document of the request
+     */
+    fn document(self, params: &Config)-> Document
+        throws RpcError
+    {
+        let uri = self.uriOf(params) ?? "";
+        if let Ok(doc) = self._docs[uri] return doc;
         throw copy RpcError(RpcCode::INVALID_PARAMS, "the document " ~ uri ~ " is not open");
     }
 
