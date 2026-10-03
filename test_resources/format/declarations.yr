@@ -1,0 +1,16 @@
+in declarations;
+
+pub fn tokenizeComment(tzer: SrcTokenizer, tok: [c8], close: [c8], opens: [[c8] => ()], mult: bool, doc: bool, ref mut cursor: SrcCursor)-> [c8] throws ErrorMsg {
+    tok
+}
+
+fn short()-> i32 throws ErrorMsg { 1 }
+
+pub record Unit {
+    pub let root: Path;
+    pub self (root: Path) with root = root {}
+}
+
+@final pub class B over A {
+    pub self (x: i32) with super(x), _y = x, _z = 2 {}
+}

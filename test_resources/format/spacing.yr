@@ -1,0 +1,20 @@
+in spacing;
+
+fn  add (a : i32,b: i32)->i32{a+b}
+
+pub fn main ( ) {
+    let x = - 1 ;
+    let y = cast ! u64 ( x ) ;
+    let s = std::conv::to!{[c8]}(y);
+    let f = | a , b | => a * b;
+    if(x<0)return;
+    let z = arr[ $ - 1us ]  ;
+    let o: ( i32 ) ? = none;
+    self . call ( x ) ;
+    foo:.bar(&x, *p);
+    if x !in y { }
+}
+
+class A {
+    pub self(x: i32) {}
+}
