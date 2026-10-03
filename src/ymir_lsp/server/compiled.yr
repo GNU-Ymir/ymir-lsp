@@ -1,5 +1,5 @@
 /**
- * The compilations of the open documents.
+ * The compilations of the open documents, and of the packages of the workspace.
  */
 in compiled;
 
@@ -8,7 +8,7 @@ use ymir_lsp::unit;
 use ymirc::parser;
 
 /**
- * The compilation of a document, and what it was compiled from
+ * The compilation of a document or of a package, and what it was compiled from
  */
 pub record Compiled {
 
@@ -17,7 +17,7 @@ pub record Compiled {
     // The compilation the document was checked by
     pub let unit: Unit;
 
-    // The text of the document compiled
+    // The text of the document compiled, empty for a package
     pub let text: [c8];
 
     // The change of the open documents it was compiled after

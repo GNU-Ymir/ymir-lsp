@@ -1,9 +1,9 @@
 # ymir-lsp
 
 The language server of Ymir, built on the `ymirc` frontend (`libymirc`): diagnostics, hover,
-definition, references, outline, workspace symbols, completion, quick fixes and formatting over
-the Language Server Protocol, on stdio or TCP. The repository also holds the IntelliJ plugin
-using it, in `intellij/`.
+definition, references, highlights, outline, workspace symbols, completion, quick fixes and
+formatting over the Language Server Protocol, on stdio or TCP. The repository also holds the
+IntelliJ plugin using it, in `intellij/`.
 
 ## The server
 
@@ -36,6 +36,11 @@ A hover shows the signature of the entity under the cursor, followed by the docu
 of a symbol, in Markdown when the client renders it: its paragraphs, its tags (`@params:`,
 `@returns:`, `@example:`...) as labelled sections, their `- name: text` items as lists, and its
 code blocks and HTML as they are written.
+
+The references of a symbol are its usages in the compilation of the document, and in the ones of
+the packages of the workspace folders, sources and tests, compiled again first when a document
+they read changed since: the modules the document does not read are searched as well. The
+highlights of a symbol are its usages in the document.
 
 A diagnostic carries its quick fixes: the edits ymirc proposes, preceded by the ones of the
 server. An undefined symbol is fixed by the `use` of each module declaring it publicly, among the
@@ -83,6 +88,10 @@ The documentation popup of a symbol, on hover or Ctrl+Q, is the hover of the ser
 LSP4IJ, its code blocks highlighted with the grammar.
 
 Alt+Enter on a diagnostic lists its quick fixes, along with the generic actions of the IDE.
+
+*Find Usages* (Alt+F7), *Show Usages* (Ctrl+Alt+F7), and Ctrl+click on a declaration list the
+usages of a symbol in the packages of the workspace, and the ones of the file are highlighted
+under the caret.
 
 *Go to Class* lists the structs, classes, enums, traits and type `def`s of the workspace symbols
 of the server, and *Go to Symbol* all of them, with the module declaring them. Those of the std
