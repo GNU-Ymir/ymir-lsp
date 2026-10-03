@@ -1,0 +1,301 @@
+/**
+ * The canonical form of a source file: its tokens laid out on lines of at
+ * most `WIDTH` characters, and its `use` declarations merged and sorted.
+ */
+in format;
+
+mod ::doc;
+mod ::printer;
+mod ::source;
+mod ::uses;
+
+use ymir_lsp::format::{doc, printer, source};
+
+use ymirc::errors;
+use ymirc::lexing::word;
+use ymirc::syntax::declaration::module;
+use ymirc::syntax::visitor;
+
+pub def WIDTH = printer::WIDTH;
+
+/**
+ * A source that has no canonical form
+ */
+pub class FormatError over Exception {
+
+    pub let msg: [c8];
+
+    pub self (msg: [c8])
+        with msg = msg
+    {}
+}
+
+/**
+ * The replacement of the text between two offsets of a source
+ */
+pub record TextEdit {
+
+    pub let start: usize;
+    pub let end: usize;
+    pub let text: [c8];
+
+    pub self (start: usize, end: usize, text: [c8])
+        with start = start
+        , end = end
+        , text = text
+    {}
+}
+
+/**
+ * The canonical form of a source file
+ */
+pub record Formatted {
+
+    pub let text: [c8];
+
+    // The edits rewriting the source into `text`, in its order
+    pub let edits: [TextEdit];
+
+    // The offsets of the declarations of the source, and the number of declarations each is in
+    pub let decls: [(usize, usize, usize)];
+
+    pub self (text: [c8], edits: [TextEdit], decls: [(usize, usize, usize)])
+        with text = text
+        , edits = edits
+        , decls = decls
+    {}
+}
+
+/**
+ * @returns: the canonical form of `text`, the source of the file `path`
+ * @throws:
+ *   - FormatError: if it does not parse, or if its canonical form would not
+ *     be the same tokens
+ */
+pub fn format(path: [c8], text: [c8])-> Formatted
+    throws FormatError
+{
+    {
+        return formatted(path, text);
+    } catch {
+        err: &FormatError => throw err;
+        _: &ErrorMsg => throw copy FormatError("the file does not parse");
+    }
+}
+
+fn formatted(path: [c8], text: [c8])-> Formatted
+    throws ErrorMsg, FormatError
+{
+    let src = Source::read(path, text);
+    let dmut visitor = copy SyntaxVisitor::fromStr(path, text);
+    let m = visitor:.read();
+
+    let dmut p = copy Printer(src);
+    let d = p:.print(m);
+    let dmut r = copy Renderer(WIDTH);
+    r:.render(d);
+    let out = r:.finish();
+
+    check(path, src, m, out, r.spans(), p.uses());
+
+    let mut decls: [(usize, usize, usize)] = [];
+    for x in p.decls() {
+        decls ~= [(src.starts[x.first], src.ends[x.last], x.depth)];
+    }
+
+    Formatted(out, editsOf(src, out, r.spans()), decls)
+}
+
+/**
+ * @returns: the edits of the canonical form of `text` rewriting the
+ * declarations the offsets `start .. end` are in, the innermost ones if they
+ * are all in a same one
+ * @throws:
+ *   - FormatError: cf. `format`
+ */
+pub fn formatRange(path: [c8], text: [c8], start: usize, end: usize)-> [TextEdit]
+    throws FormatError
+{
+    let f = format(path, text);
+    let mut depth = 0us;
+    let mut lo = 0us;
+    let mut hi = text.len;
+    let mut selected: [(usize, usize)] = [];
+    loop {
+        let mut found: [(usize, usize)] = [];
+        for d in f.decls {
+            let (s, e, dd) = d;
+            if (dd == depth && s >= lo && e <= hi && s < end && e > start) found ~= [(s, e)];
+        }
+
+        if (found.len == 1us && found[0us]._0 <= start && end <= found[0us]._1) {
+            let mut inner = false;
+            for d in f.decls {
+                let (s, e, dd) = d;
+                if (dd == depth + 1us && s >= found[0us]._0 && e <= found[0us]._1 && s < end && e > start) inner = true;
+            }
+
+            if (inner) {
+                lo = found[0us]._0;
+                hi = found[0us]._1;
+                depth += 1us;
+                continue;
+            }
+        }
+
+        selected = found;
+        break;
+    }
+
+    let mut res: [TextEdit] = [];
+    for e in f.edits {
+        for s in selected {
+            let first = lineStart(text, s._0);
+            if (e.start >= first && e.end <= s._1) {
+                res ~= [e];
+                break;
+            }
+        }
+    }
+
+    res
+}
+
+fn lineStart(text: [c8], at: usize)-> usize {
+    let mut i = at;
+    while (i > 0us && text[i - 1us] != '\n') { i -= 1us; }
+    i
+}
+
+/**
+ * @returns: the edits rewriting the source of `src` into `out`, whose tokens were written at `spans`
+ */
+fn editsOf(src: &Source, out: [c8], spans: [Span])-> [TextEdit] {
+    let text = src.text;
+    let mut res: [TextEdit] = [];
+    let mut from = 0us;
+    let mut outFrom = 0us;
+    for sp in spans {
+        let s = src.starts[sp.first];
+        let e = src.ends[sp.last];
+        if (text[from .. s] != out[outFrom .. sp.start]) res ~= [TextEdit(from, s, out[outFrom .. sp.start])];
+        if (text[s .. e] != out[sp.start .. sp.end]) res ~= [TextEdit(s, e, out[sp.start .. sp.end])];
+        from = e;
+        outFrom = sp.end;
+    }
+
+    if (text[from .. $] != out[outFrom .. $]) res ~= [TextEdit(from, text.len, out[outFrom .. $])];
+    res
+}
+
+/**
+ * Check that `out` parses, and holds the tokens of `src` in their order, the
+ * string literals split being concatenated, and the `use` declarations
+ * rewritten importing the same paths
+ * @throws:
+ *   - FormatError: if it does not
+ */
+fn check(path: [c8], src: &Source, m: &ModuleDecl, out: [c8], spans: [Span], uses: (UseBlock)?)
+    throws ErrorMsg, FormatError
+{
+    let res = Source::read(path, out);
+    let dmut visitor = copy SyntaxVisitor::fromStr(path, out);
+    let om = visitor:.read();
+
+    let mut skipped = (src.len, src.len);
+    let mut outSkipped = (out.len, out.len);
+    if let Ok(u) = uses {
+        skipped = (u.first, u.last);
+        for sp in spans if sp.first == u.first {
+            outSkipped = (sp.start, sp.end);
+        }
+    }
+
+    let mut before: [usize] = [];
+    for i in 0us .. src.len if i < skipped._0 || i > skipped._1 {
+        before ~= [i];
+    }
+
+    let mut after: [usize] = [];
+    for i in 0us .. res.len if res.starts[i] < outSkipped._0 || res.starts[i] >= outSkipped._1 {
+        after ~= [i];
+    }
+
+    let a = keys(src, before);
+    let b = keys(res, after);
+    if (a != b) {
+        let mut k = 0us;
+        while (k < a.len && k < b.len && a[k] == b[k]) { k += 1us; }
+        let line = if (k < before.len) { src.words[before[k]].line } else { 0u64 };
+        throw copy FormatError("the canonical form of the file would not be the same tokens, from line " ~ std::conv::to!{[c8]} (line));
+    }
+
+    if (usePaths(m) != usePaths(om)) {
+        throw copy FormatError("the canonical form of the file would not import the same paths");
+    }
+}
+
+/**
+ * @returns: the tokens `indexes` of `src`, the string literals concatenated by `~` merged
+ */
+fn keys(src: &Source, indexes: [usize])-> [[c8]] {
+    let mut res: [[c8]] = [];
+    let mut k = 0us;
+    while (k < indexes.len) {
+        let i = indexes[k];
+        if let Ok(s) = plainString(src.words[i]) {
+            let mut content = s;
+            while (k + 2us < indexes.len && src.at(indexes[k + 1us]) == "~") {
+                if let Ok(n) = plainString(src.words[indexes[k + 2us]]) {
+                    content = content ~ n;
+                    k += 2us;
+                } else break;
+            }
+
+            res ~= ["\"" ~ content];
+        } else {
+            res ~= [src.at(i)];
+        }
+
+        k += 1us;
+    }
+
+    res
+}
+
+fn plainString(w: &Word)-> ([c8])? {
+    if let s: &StringWord = w {
+        if (s.open == "\"" && s.suffix.isEof) return s.str?;
+    }
+
+    none
+}
+
+/**
+ * @returns: the paths the top level `use` declarations of `m` import, sorted, each once
+ */
+fn usePaths(m: &ModuleDecl)-> [[c8]] {
+    use std::algorithm::sorting;
+
+    let mut all: [[c8]] = [];
+    for d in m.block.decls {
+        if let u: &UseDecl = d {
+            if let Ok(segs) = uses::segments(u) {
+                let mut p = "";
+                for s in segs {
+                    p = p ~ "::" ~ s;
+                }
+
+                all ~= [p];
+            }
+        }
+    }
+
+    let sorted = sort(copy all, |a, b| => a < b);
+    let mut res: [[c8]] = [];
+    for p in sorted {
+        if (res.len == 0us || res[$ - 1us] != p) res ~= [p];
+    }
+
+    res
+}

@@ -4,6 +4,7 @@
 in ymir_lsp;
 
 pub mod ::document;
+pub mod ::format;
 pub mod ::server;
 pub mod ::sys;
 pub mod ::transport;
