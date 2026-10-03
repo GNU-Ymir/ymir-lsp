@@ -20,6 +20,10 @@
                                  displayName="Ymir"/>
         <newProjectWizard.generator implementation="org.gnu.ymir.intellij.project.YmirNewProjectWizard"/>
         <textmate.bundleProvider implementation="org.gnu.ymir.intellij.YmirTextMateBundleProvider"/>
+        <annotator language="textmate" implementationClass="org.gnu.ymir.intellij.highlight.YmirSelfAnnotator"/>
+        <colorSettingsPage implementation="org.gnu.ymir.intellij.highlight.YmirColorSettingsPage"/>
+        <additionalTextAttributes scheme="Default" file="colorSchemes/YmirDefault.xml"/>
+        <additionalTextAttributes scheme="Darcula" file="colorSchemes/YmirDarcula.xml"/>
 
         <configurationType implementation="org.gnu.ymir.intellij.run.GyllirConfigurationType"/>
         <runConfigurationProducer implementation="org.gnu.ymir.intellij.run.GyllirRunConfigurationProducer"/>
