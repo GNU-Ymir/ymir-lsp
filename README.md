@@ -1,8 +1,9 @@
 # ymir-lsp
 
 The language server of Ymir, built on the `ymirc` frontend (`libymirc`): diagnostics, hover,
-definition, references, outline, workspace symbols, completion and quick fixes over the Language
-Server Protocol, on stdio or TCP. The repository also holds the IntelliJ plugin using it, in `intellij/`.
+definition, references, outline, workspace symbols, completion, quick fixes and formatting over
+the Language Server Protocol, on stdio or TCP. The repository also holds the IntelliJ plugin
+using it, in `intellij/`.
 
 ## The server
 
@@ -36,6 +37,13 @@ folders are compiled whole, sources and tests, once the server is idle after the
 and after each save, and a checked document replaces the declarations of its file. A query matches
 the names starting with its first character and holding the others in order.
 
+A document is formatted in its canonical form: its tokens on lines of at most 120 characters,
+indented by 4 spaces, the lists that do not fit broken one element a line, aligned on their
+opening parenthesis, the consecutive `let`, `def`, enum fields and `match` arms aligned on their
+`=` or `=>`, and its top-level `use` declarations merged and sorted, `std` last, as yr-mode's
+`yr-optimize-imports` writes them. A range formats the declarations it is in, and a document
+that does not parse is left as it is.
+
 ## The IntelliJ plugin
 
 ```sh
@@ -61,6 +69,10 @@ when first opened (*Run* and *Test*, or *Test* and *Build* for a library), and t
 of the server, and *Go to Symbol* all of them, with the module declaring them. Those of the std
 and of `.deps`, which is excluded from a project rooted at a package, are listed with the
 non-project items.
+
+*Code > Reformat Ymir Code* (Meta+Alt+L, Ctrl+Alt+L being the screen lock of most Linux
+desktops) runs *Reformat Code* in a `.yr` file, which the server formats, or only the declarations
+of the selection.
 
 The build downloads the IDE of `platformVersion` (`gradle.properties`). To build against an
 installed one instead, set `platformLocalPath` to its directory, e.g. in
