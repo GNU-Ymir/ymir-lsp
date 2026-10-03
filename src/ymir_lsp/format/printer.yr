@@ -1,0 +1,2063 @@
+/**
+ * The layout of the tokens of a module, from its syntax tree: the tokens are
+ * written in the order of the source, those the tree does not place included,
+ * and the tree decides where the lines break, how they are indented, and
+ * what is aligned.
+ */
+in printer;
+
+use ymir_lsp::format::{doc, source};
+
+use ymirc::lexing::word;
+use ymirc::syntax::declaration;
+use ymirc::syntax::declaration::{block, custom, function, macro_, module};
+use ymirc::syntax::expression;
+use ymirc::syntax::expression::{block, compose, control, empty, instruction, literal, match_, memory, operator, type};
+
+pub def WIDTH = 120us;
+
+pub def INDENT = 4us;
+
+/**
+ * The separator written before a token
+ */
+pub enum Sep : u8
+| AUTO  = 0u8 // a space or nothing, from the tokens around it
+| NONE  = 1u8
+| SPACE = 2u8
+| PAD   = 3u8 // `_pad` spaces
+| LINE  = 4u8
+| HARD  = 5u8;
+
+/**
+ * How the instructions of a block are separated
+ */
+pub enum BlockMode : u8
+| AUTO = 0u8 // on a line if the block was written on one with at most one instruction and fits
+| LINE = 1u8 // on a line if the group the block is in fits
+| HARD = 2u8; // each on its own line
+
+/**
+ * What the layout of a token was decided as
+ */
+pub enum Role : u8
+| NONE         = 0u8
+| LAMBDA_CLOSE = 1u8 // the `|` closing the parameters of a lambda
+| CTOR         = 2u8 // the `self` of a constructor, spaced from its parameters
+| SPLIT        = 3u8 // a string literal that can be split, aligned on itself
+| SPLIT_CHAIN  = 4u8; // a string literal that can be split, aligned on the `~` chain it is an operand of
+
+/**
+ * The tokens of a declaration
+ */
+pub record DeclRange {
+
+    pub let first: usize;
+    pub let last: usize;
+
+    // The number of declarations it is in
+    pub let depth: usize;
+
+    pub self (first: usize, last: usize, depth: usize)
+        with first = first
+        , last = last
+        , depth = depth
+    {}
+}
+
+/**
+ * The tokens rewritten as the canonical form of the `use` declarations
+ */
+pub record UseBlock {
+
+    pub let first: usize;
+    pub let last: usize;
+    pub let text: [c8];
+
+    pub self (first: usize, last: usize, text: [c8])
+        with first = first
+        , last = last
+        , text = text
+    {}
+}
+
+@final
+pub class Printer {
+
+    let _src: &Source;
+
+    let dmut _b: &Builder = copy Builder();
+
+    // The next token to write
+    let mut _cursor: usize = 0us;
+
+    // The separator before the next token
+    let mut _sep: Sep = Sep::AUTO;
+    let mut _pad: usize = 0us;
+
+    // Whether an empty line of the source before the next token is kept
+    let mut _blankOk: bool = false;
+
+    // Whether the line breaks of the source are kept before the tokens the tree does not place
+    let mut _preserve: bool = false;
+
+    // The gap whose comments were written, and how many of them
+    let mut _gapAt: usize = 0us;
+    let mut _gapDone: usize = 0us;
+
+    // Whether a comment written forces a line break before the next token
+    let mut _forceHard: bool = false;
+
+    // Whether an own line comment was written before the next token, and
+    // what it is to be separated from it by
+    let mut _afterComment: bool = false;
+    let mut _commentSep: Sep = Sep::HARD;
+
+    let dmut _roles: [Role];
+
+    // The number of indentation levels the next lines are in
+    let mut _depth: usize = 0us;
+
+    // The number of declarations the current one is in
+    let mut _declDepth: usize = 0us;
+
+    let mut _decls: [DeclRange] = [];
+
+    let mut _uses: (UseBlock)? = none;
+
+    pub self (src: &Source)
+        with _src = src
+        , _roles = copy [Role::NONE ; src.len]
+    {}
+
+    /**
+     * @returns: the layout of the module `m`
+     */
+    pub fn print(mut self, m: &ModuleDecl)-> &Doc {
+        let n = self._src.len;
+        let mut lo = 0us;
+        if (!m.name.isEof && self._src.isTok(0us, "in")) {
+            for i in 0us .. n if self._src.isTok(i, ";") {
+                lo = i + 1us;
+                break;
+            }
+        }
+
+        self:.declarations(m.block.decls, lo, n, topLevel-> true);
+        self:.flushTo(n);
+        self:.gap(n, all-> true);
+        self._b:.finish()
+    }
+
+    /**
+     * @returns: the tokens of the declarations, in their order
+     */
+    pub fn decls(self)-> [DeclRange] {
+        self._decls
+    }
+
+    /**
+     * @returns: the `use` declarations rewritten, if any
+     */
+    pub fn uses(self)-> (UseBlock)? {
+        self._uses
+    }
+
+    /*!
+     * ====================================================================================================
+     * ====================================          DECLARATIONS          ===============================
+     * ====================================================================================================
+     */
+
+    /**
+     * Write the declarations `decls` of the tokens `lo .. hi`, each on its own lines
+     */
+    fn declarations(mut self, decls: [&Declaration], lo: usize, hi: usize, topLevel: bool = false) {
+        let items = self.declItems(decls);
+        let mut anchors: [usize] = [];
+        for d in items {
+            anchors ~= [self.declAnchor(d)];
+        }
+
+        let starts = self.starts(anchors, lo, hi);
+        let pads = self.declPads(items, starts, hi);
+        let mut k = 0us;
+        while (k < items.len) {
+            let s = starts[k];
+            let e = if (k + 1us < items.len) { starts[k + 1us] - 1us } else { hi - 1us };
+
+            if (topLevel) {
+                let mut m = k;
+                while (m < items.len && isUse(items[m])) { m += 1us; }
+                if (m > k && self:.useBlock(decls, s, if (m < items.len) { starts[m] - 1us } else { hi - 1us })) {
+                    k = m;
+                    continue;
+                }
+            }
+
+            self:.sepAt(Sep::HARD, s, blank-> s != 0us);
+            self._decls ~= [DeclRange(s, e, self._declDepth)];
+            self._declDepth += 1us;
+            self:.attributes(s);
+            self:.declaration(items[k], s, e, pads[k]);
+            self._declDepth -= 1us;
+            self:.flushTo(e + 1us);
+            k += 1us;
+        }
+    }
+
+    /**
+     * @returns: the declarations of `decls`, the `use` declarations of a same
+     * statement once
+     */
+    fn declItems(self, decls: [&Declaration])-> [&Declaration] {
+        let mut res: [&Declaration] = [];
+        let mut last: (usize)? = none;
+        for d in decls {
+            let a = self.declAnchor(d);
+            if let Ok(l) = last {
+                if (l == a) continue;
+            }
+
+            last = a?;
+            res ~= [d];
+        }
+
+        res
+    }
+
+    /**
+     * @returns: a token of the declaration `d` that precedes the ones of its content
+     */
+    fn declAnchor(self, d: &Declaration)-> usize {
+        match d {
+            t: &TemplateDecl => return self.declAnchor(t.decl);
+        }
+
+        self.index(d.loc)
+    }
+
+    /**
+     * Write the attributes starting the declaration at `s`, on their own line
+     */
+    fn attributes(mut self, s: usize) {
+        let mut j = s;
+        while (self._src.isTok(j, "@")) {
+            j += 1us;
+            if (self._src.isTok(j, "{")) {
+                j = self._src.partners[j] + 1us;
+            } else {
+                j += 1us;
+                if (self._src.isTok(j, "(")) j = self._src.partners[j] + 1us;
+            }
+        }
+
+        if (j != s && j < self._src.len) self:.sepAt(Sep::HARD, j);
+    }
+
+    fn declaration(mut self, d: &Declaration, s: usize, e: usize, pad: usize) {
+        match d {
+            t: &TemplateDecl => {
+                let open = self.index(t.loc) + 1us;
+                if (self._src.isTok(open, "{")) self:.list(open, t.params);
+                self:.declaration(t.decl, s, e, pad);
+            }
+            b: &BlockDecl => {
+                let at = self.index(b.loc);
+                if (self._src.isTok(at + 1us, "{") && self._src.partners[at + 1us] == e) {
+                    self:.body(b.decls, at + 1us);
+                } else if (b.decls.len == 1us) {
+                    self:.declaration(b.decls[0us], s, e, pad);
+                } else {
+                    self:.flushTo(e + 1us);
+                }
+            }
+            c: &CtorDecl => self:.function(c);
+            f: &FunctionDecl => self:.function(f);
+            u: &UnitTestDecl => self:.unittest(u);
+            t: &TypeDecl => self:.body(t.decls, self.bodyOpen(e));
+            t: &TraitDecl => self:.body(t.decls, self.bodyOpen(e));
+            i: &ImplDecl => {
+                if (self._src.isTok(e, "}")) self:.body(i.decls, self._src.partners[e]);
+            }
+            m: &ModuleDecl => self:.body(m.block.decls, self.bodyOpen(e));
+            x: &ExternBlockDecl => {
+                if (self._src.isTok(e, "}") && self._src.partners[e] > self.index(x.loc) + 1us) {
+                    let open = self._src.partners[e];
+                    if (self.isBraceAfterHeader(self.index(x.loc), open)) {
+                        self:.body(x.decls, open);
+                        return;
+                    }
+                }
+
+                if (x.decls.len == 1us) self:.declaration(x.decls[0us], s, e, pad);
+            }
+            c: &CondBlockDecl => self:.condBlock(c);
+            g: &GlobalVarDecl => self:.varDecl(g.var, pad);
+            df: &DefDecl => {
+                if (pad != 0us) self:.padAt(pad, self.index(df.tokDecl));
+                self:.expr(df.content, value-> true);
+            }
+            en: &EnumDecl => self:.members(copy [f.loc for f in en.fields], copy [f.value for f in en.fields], e);
+            un: &UnionDecl => self:.members(copy [t.loc for t in un.types], un.types, e, isUnion-> true);
+            MacroDecl() => {
+                self:.flushTo(self.bodyOpen(e) + 1us);
+                self._preserve = true;
+                self:.flushTo(e);
+                self._preserve = false;
+            }
+        }
+    }
+
+    /**
+     * @returns: whether `open` is the brace following the header starting at `at`
+     */
+    fn isBraceAfterHeader(self, at: usize, open: usize)-> bool {
+        for j in at + 1us .. open {
+            if (self._src.isTok(j, ";") || self._src.isTok(j, "{")) return false;
+        }
+
+        true
+    }
+
+    /**
+     * @returns: the brace opening the body ending at `e`
+     */
+    fn bodyOpen(self, e: usize)-> usize {
+        if (self._src.isTok(e, "}")) return self._src.partners[e];
+        e
+    }
+
+    /**
+     * Write the body of declarations `decls` opened by the brace `open`
+     */
+    fn body(mut self, decls: [&Declaration], open: usize) {
+        if (!self._src.isTok(open, "{")) return;
+        let close = self._src.partners[open];
+        self:.flushTo(open);
+        self:.sepAt(Sep::SPACE, open);
+        self:.tok(open);
+        if (decls.len == 0us && self.isEmpty(open, close)) {
+            self:.sepAt(Sep::NONE, close);
+            self:.tok(close);
+            return;
+        }
+
+        self:.indent();
+        self:.declarations(decls, open + 1us, close);
+        self:.flushTo(close);
+        self:.closingGap(close);
+        self:.dedent();
+        self:.sepAt(Sep::HARD, close);
+        self:.tok(close);
+    }
+
+    /**
+     * @returns: whether nothing, not even a comment, is between the brackets `open` and `close`
+     */
+    fn isEmpty(self, open: usize, close: usize)-> bool {
+        close == open + 1us && self._src.gaps[close].comments.len == 0us
+    }
+
+    fn condBlock(mut self, c: &CondBlockDecl) {
+        self:.expr(c.test);
+        let mut open = self.index(c.loc) + 1us;
+        while (open < self._src.len && !self._src.isTok(open, "{")) { open += 1us; }
+        self:.body(c.decls, open);
+        if (open < self._src.len) {
+            let elseTok = self._src.partners[open] + 1us;
+            if (self._src.isTok(elseTok, "else")) {
+                self:.sepAt(Sep::SPACE, elseTok);
+                self:.tok(elseTok);
+                match c.else_ {
+                    n: &CondBlockDecl => self:.condBlock(n);
+                    b: &BlockDecl => self:.body(b.decls, elseTok + 1us);
+                }
+            }
+        }
+    }
+
+    /**
+     * Write the members of an enum or a union, each on its line, the `=` of
+     * the values of the ones of an enum aligned
+     */
+    fn members(mut self, locs: [&Word], values: [&Expression], e: usize, isUnion: bool = false) {
+        let mut starts: [usize] = [];
+        for k in 0us .. locs.len {
+            starts ~= [if (isUnion) { self.start(values[k]) - 1us } else { self.index(locs[k]) }];
+        }
+
+        let mut eqs: [usize] = [];
+        let mut widest = 0us;
+        if (!isUnion) {
+            for k in 0us .. starts.len {
+                let end = if (k + 1us < starts.len) { starts[k + 1us] } else { e + 1us };
+                let eq = self.find(starts[k], end, "=") ?? starts[k];
+                eqs ~= [eq];
+                if let Ok(w) = self.flatWidth(starts[k], eq - 1us) {
+                    if (w > widest) widest = w;
+                }
+            }
+        }
+
+        for k in 0us .. starts.len {
+            self:.sepAt(Sep::HARD, starts[k], blank-> true);
+            if (!isUnion) {
+                if let Ok(w) = self.flatWidth(starts[k], eqs[k] - 1us) {
+                    self:.padAt(widest - w + 1us, eqs[k]);
+                }
+            }
+
+            self:.expr(values[k]);
+        }
+    }
+
+    /**
+     * @returns: the spaces to write before the `=` or `:` of each item, to
+     * align the ones of the consecutive single line `def`s and `let`s
+     */
+    fn declPads(self, items: [&Declaration], starts: [usize], hi: usize)-> [usize] {
+        let mut eqs: [(usize)?] = [];
+        for k in 0us .. items.len {
+            let e = if (k + 1us < items.len) { starts[k + 1us] - 1us } else { hi - 1us };
+            eqs ~= [self.alignedTok(items[k], starts[k], e)];
+        }
+
+        self.pads(starts, eqs, hi)
+    }
+
+    /**
+     * @returns: the token the declaration `d` of the tokens `s .. e` is
+     * aligned on, none if it is not aligned
+     */
+    fn alignedTok(self, d: &Declaration, s: usize, e: usize)-> (usize)? {
+        match d {
+            bd: &BlockDecl => {
+                let at = self.index(bd.loc);
+                if (bd.decls.len == 1us && !self._src.isTok(at + 1us, "{")) return self.alignedTok(bd.decls[0us], s, e);
+            }
+            df: &DefDecl => return self.index(df.tokDecl)?;
+            g: &GlobalVarDecl => {
+                if (g.var.value !of EmptyExpr) return self.find(self.index(g.var.name), e + 1us, "=");
+            }
+        }
+
+        none
+    }
+
+    /**
+     * @returns: the spaces before the aligned token `eqs[k]` of each item starting at
+     * `starts[k]`, aligning the ones of the consecutive single line items
+     */
+    fn pads(self, starts: [usize], eqs: [(usize)?], hi: usize)-> [usize] {
+        let n = starts.len;
+        let ind = self._depth * INDENT;
+        let mut widths: [(usize)?] = [];
+        let mut fulls: [usize] = [];
+        for k in 0us .. n {
+            let e = if (k + 1us < n) { starts[k + 1us] - 1us } else { hi - 1us };
+            let mut w: (usize)? = none;
+            let mut full = 0us;
+            if let Ok(eq) = eqs[k] {
+                if let Ok(f) = self.flatWidth(starts[k], e) {
+                    let wide = f + self.trailingWidth(e + 1us);
+                    if (ind + wide <= WIDTH) {
+                        w = self.flatWidth(starts[k], eq - 1us);
+                        full = wide;
+                    }
+                }
+            }
+
+            widths ~= [w];
+            fulls ~= [full];
+        }
+
+        let mut res: [usize] = copy [0us ; n];
+        let mut k = 0us;
+        while (k < n) {
+            if (!isKnown(widths[k])) {
+                k += 1us;
+                continue;
+            }
+
+            let mut m = k + 1us;
+            while (m < n && isKnown(widths[m]) && self._src.gaps[starts[m]].leading() < 2u32 && self._src.gaps[starts[m]].comments.len == 0us) {
+                m += 1us;
+            }
+
+            let dmut member: [bool] = copy [true ; m - k];
+            loop {
+                let mut widest = 0us;
+                for j in k .. m if member[j - k] {
+                    let w = widths[j] ?? 0us;
+                    if (w > widest) widest = w;
+                }
+
+                let mut changed = false;
+                for j in k .. m if member[j - k] {
+                    let w = widths[j] ?? 0us;
+                    if (ind + widest + 1us + fulls[j] - w > WIDTH) {
+                        member[j - k] = false;
+                        changed = true;
+                    }
+                }
+
+                if (!changed) {
+                    let mut count = 0us;
+                    for j in k .. m if member[j - k] {
+                        count += 1us;
+                    }
+
+                    if (count > 1us) {
+                        let dmut out = copy res;
+                        for j in k .. m if member[j - k] {
+                            let colon = if let Ok(eq) = eqs[j] { self._src.isTok(eq, ":") } else { false };
+                            out[j] = widest - (widths[j] ?? 0us) + (if (colon) { 0us } else { 1us });
+                        }
+
+                        res = out;
+                    }
+
+                    break;
+                }
+            }
+
+            k = m;
+        }
+
+        res
+    }
+
+    /**
+     * Write the canonical form of the `use` declarations of `decls` that are
+     * in the tokens `s .. e`, if they are plain paths and hold no comment
+     *
+     * @returns: whether they were
+     */
+    fn useBlock(mut self, decls: [&Declaration], s: usize, e: usize)-> bool {
+        let mut j = e;
+        while (j > s && !self._src.isTok(j, ";")) { j -= 1us; }
+        for i in s + 1us ... j if self._src.gaps[i].comments.len != 0us {
+            return false;
+        }
+
+        let mut paths: [[[c8]]] = [];
+        for d in decls {
+            let a = self.declAnchor(d);
+            if (a < s || a > j) continue;
+            if let u: &UseDecl = d {
+                if let Ok(p) = uses::segments(u) {
+                    paths ~= [p];
+                } else return false;
+            } else return false;
+        }
+
+        let text = uses::canonical(paths);
+        self:.sepAt(Sep::HARD, s, blank-> s != 0us);
+        self:.replace(s, j, text);
+        self._uses = UseBlock(s, j, text)?;
+        true
+    }
+
+    /*!
+     * ====================================================================================================
+     * =====================================          FUNCTIONS          ==================================
+     * ====================================================================================================
+     */
+
+    /**
+     * Write the function `f`: its parameters, its `with` and `throws` clauses
+     * each on their own lines, then its body
+     */
+    fn function(mut self, f: &FunctionDecl) {
+        let mut open = if (f.name.isEof) { self.index(f.loc) + 1us } else { self.index(f.name) + 1us };
+        if let c: &CtorDecl = f {
+            self._roles[self.index(c.loc)] = Role::CTOR;
+        }
+
+        if (self._src.isTok(open, "{")) open = self._src.partners[open] + 1us;
+
+        if (self._src.isTok(open, "(")) {
+            let mut params: [&Expression] = [];
+            for p in f.proto.params {
+                params ~= [p];
+            }
+
+            self:.list(open, params);
+        }
+
+        if (f.proto.retType !of EmptyExpr) self:.expr(f.proto.retType);
+
+        let hasBody = f.body !of EmptyExpr;
+        let mut broken = false;
+        if let c: &CtorDecl = f {
+            if (c.fields.len != 0us || isSome(c.redirect)) {
+                self:.ctorWith(c);
+                broken = true;
+            }
+        }
+
+        if (!f.throwerLoc.isEof) {
+            let t = self.index(f.throwerLoc);
+            self:.flushTo(t);
+            self:.indent();
+            self:.sepAt(Sep::HARD, t);
+            for th in f.throwers {
+                self:.expr(th);
+            }
+
+            if (f.throwers.len != 0us) self:.flushTo(self.last(f.throwers[$ - 1us]) + 1us);
+            self:.dedent();
+            broken = true;
+        }
+
+        if (hasBody) {
+            if let b: &BlockExpr = f.body {
+                let bo = self.blockOpen(b);
+                self:.flushTo(bo);
+                if (broken) self:.sepAt(Sep::HARD, bo);
+                self:.block(b, mode-> if (broken) { BlockMode::HARD } else { BlockMode::AUTO });
+            }
+        }
+    }
+
+    /**
+     * Write the `with` clause of the constructor `c`, a line for each field
+     */
+    fn ctorWith(mut self, c: &CtorDecl) {
+        let mut first: (usize)? = none;
+        if let Ok(r) = c.redirect {
+            first = (self.index(r.loc) - 1us)?;
+        } else if (c.fields.len != 0us) {
+            first = (self.index(c.fields[0us].name) - 1us)?;
+        }
+
+        let w = first ?? 0us;
+        if (!self._src.isTok(w, "with")) return;
+        self:.flushTo(w);
+        self:.indent();
+        self:.sepAt(Sep::HARD, w);
+        if let Ok(r) = c.redirect {
+            let open = self.index(r.loc) + 1us;
+            let mut j = open;
+            while (j < self._src.len && !self._src.isTok(j, "(")) { j += 1us; }
+            self:.list(j, r.params);
+        }
+
+        for k in 0us .. c.fields.len {
+            let n = self.index(c.fields[k].name);
+            if (n > 0us && self._src.isTok(n - 1us, ",")) {
+                self:.sepAt(Sep::HARD, n - 1us);
+                self:.sepAt(Sep::SPACE, n);
+            }
+
+            self:.expr(c.fields[k].value, value-> true);
+        }
+
+        if (c.fields.len != 0us) {
+            self:.flushTo(self.last(c.fields[$ - 1us].value) + 1us);
+        } else if let Ok(r) = c.redirect {
+            let open = self.index(r.loc) + 1us;
+            let mut j = open;
+            while (j < self._src.len && !self._src.isTok(j, "(")) { j += 1us; }
+            self:.flushTo(self.closing(j) + 1us);
+        }
+
+        self:.dedent();
+    }
+
+    fn unittest(mut self, u: &UnitTestDecl) {
+        if let b: &BlockExpr = u.body {
+            let open = self.blockOpen(b);
+            let at = self.index(u.loc);
+            for j in at + 1us .. open {
+                if (self._src.isTok(j, "(")) {
+                    let mut params: [&Expression] = [];
+                    for p in u.params {
+                        params ~= [p];
+                    }
+
+                    self:.list(j, params);
+                    break;
+                }
+            }
+
+            self:.block(b);
+        }
+    }
+
+    /*!
+     * ====================================================================================================
+     * ======================================          BLOCKS          ====================================
+     * ====================================================================================================
+     */
+
+    /**
+     * @returns: the brace opening the block `b`
+     */
+    fn blockOpen(self, b: &BlockExpr)-> usize {
+        if let Ok(e) = self._src.find(b.end) {
+            if (self._src.isTok(e, "}")) return self._src.partners[e];
+        }
+
+        self.index(b.loc)
+    }
+
+    /**
+     * Write the block `b`, a line for each of its declarations and
+     * instructions, on a single line when it was written on one, with at
+     * most one instruction, and fits
+     */
+    fn block(mut self, b: &BlockExpr, mode: BlockMode = BlockMode::AUTO) {
+        let open = self.blockOpen(b);
+        if (!self._src.isTok(open, "{")) {
+            for c in b.content if c !of EmptyExpr {
+                self:.expr(c);
+            }
+
+            return;
+        }
+
+        let close = self._src.partners[open];
+        let mut items: [&Expression] = [];
+        let mut anchors: [usize] = [];
+        let mut decls: [&Declaration] = [];
+        if let bd: &BlockDecl = b.declModule {
+            decls = self.declItems(bd.decls);
+        }
+
+        for d in decls {
+            anchors ~= [self.declAnchor(d)];
+        }
+
+        for c in b.content if c !of EmptyExpr {
+            items ~= [c];
+            anchors ~= [self.first(c)];
+        }
+
+        self:.flushTo(open);
+        if (decls.len == 0us && items.len == 0us && self.isEmpty(open, close)) {
+            self:.tok(open);
+            self:.sepAt(Sep::NONE, close);
+            self:.tok(close);
+            self:.guards(b);
+            return;
+        }
+
+        let inline = mode == BlockMode::AUTO && self.isInline(b);
+        let sep = if (inline || mode == BlockMode::LINE) { Sep::LINE } else { Sep::HARD };
+        if (inline) self:.open(DocKind::GROUP, open);
+        self:.tok(open);
+        self:.indent();
+
+        let starts = self.starts(anchors, open + 1us, close);
+        let pads = self.stmtPads(items, starts[decls.len .. $], close);
+        for k in 0us .. decls.len {
+            let e = if (k + 1us < starts.len) { starts[k + 1us] - 1us } else { close - 1us };
+            self:.sepAt(sep, starts[k], blank-> k != 0us);
+            self._decls ~= [DeclRange(starts[k], e, self._declDepth)];
+            self._declDepth += 1us;
+            self:.attributes(starts[k]);
+            self:.declaration(decls[k], starts[k], e, 0us);
+            self._declDepth -= 1us;
+            self:.flushTo(e + 1us);
+        }
+
+        for k in 0us .. items.len {
+            let s = starts[decls.len + k];
+            self:.sepAt(sep, s, blank-> decls.len + k != 0us);
+            self:.statement(items[k], pads[k]);
+            let e = if (decls.len + k + 1us < starts.len) { starts[decls.len + k + 1us] } else { close };
+            self:.flushTo(e);
+        }
+
+        self:.flushTo(close);
+        self:.closingGap(close);
+        self:.dedent();
+        self:.sepAt(sep, close);
+        self:.tok(close);
+        if (inline) self:.close();
+        self:.guards(b);
+    }
+
+    /**
+     * @returns: whether the block `b` was written on a line, with at most one
+     * instruction and no declaration
+     */
+    fn isInline(self, b: &BlockExpr)-> bool {
+        let open = self.blockOpen(b);
+        if (!self._src.isTok(open, "{")) return false;
+        let mut n = 0us;
+        for c in b.content if c !of EmptyExpr {
+            n += 1us;
+        }
+
+        if let bd: &BlockDecl = b.declModule {
+            if (bd.decls.len != 0us) return false;
+        }
+
+        n <= 1us && self.isOneLine(open, self._src.partners[open])
+    }
+
+    /**
+     * Write the catcher and the scope guards following the block `b`
+     */
+    fn guards(mut self, b: &BlockExpr) {
+        let mut parts: [(usize, &Expression)] = [];
+        if (b.catcher !of EmptyExpr) parts ~= [(self.index(b.catcher.loc), b.catcher)];
+        for g in b.guards {
+            parts ~= [(self.index(g.loc), g)];
+        }
+
+        while (parts.len != 0us) {
+            let mut best = 0us;
+            for j in 1us .. parts.len {
+                if (parts[j]._0 < parts[best]._0) best = j;
+            }
+
+            let (at, e) = parts[best];
+            parts = parts[0us .. best] ~ parts[best + 1us .. $];
+            self:.flushTo(at);
+            self:.sepAt(Sep::SPACE, at);
+            match e {
+                m: &MatcherExpr => self:.matcher(m);
+                g: &ScopeGuardExpr => {
+                    self:.tok(at);
+                    self:.expr(g.content);
+                }
+            }
+        }
+    }
+
+    /**
+     * @returns: whether the tokens `a` and `b` are on the same line of the source
+     */
+    fn isOneLine(self, a: usize, b: usize)-> bool {
+        for i in a + 1us ... b {
+            if (self._src.gaps[i].leading() != 0u32 || self._src.gaps[i].breaks != 0u32 || self._src.gaps[i].comments.len != 0us) return false;
+            if (i < b && hasLineBreak(self._src.at(i))) return false;
+        }
+
+        true
+    }
+
+    /**
+     * @returns: the spaces before the `=` of each `let` of `items`, aligning
+     * the ones of consecutive single line instructions
+     */
+    fn stmtPads(self, items: [&Expression], starts: [usize], close: usize)-> [usize] {
+        let mut eqs: [(usize)?] = [];
+        for k in 0us .. items.len {
+            let e = if (k + 1us < items.len) { starts[k + 1us] } else { close };
+            let mut eq: (usize)? = none;
+            match items[k] {
+                v: &VarDeclExpr => {
+                    if (v.value !of EmptyExpr) eq = self.find(self.index(v.name), e, "=");
+                }
+                p: &PatternVarDeclExpr => eq = self.find(self.index(p.loc), e, "=");
+            }
+
+            eqs ~= [eq];
+        }
+
+        self.pads(starts, eqs, close)
+    }
+
+    fn statement(mut self, e: &Expression, pad: usize) {
+        match e {
+            v: &VarDeclExpr => self:.varDecl(v, pad);
+            p: &PatternVarDeclExpr => {
+                self:.expr(p.pattern);
+                if (pad != 0us) {
+                    if let Ok(eq) = self.find(self.index(p.loc), self._src.len, "=") self:.padAt(pad, eq);
+                }
+
+                self:.expr(p.value, value-> true);
+            }
+            _ => self:.expr(e);
+        }
+    }
+
+    fn varDecl(mut self, v: &VarDeclExpr, pad: usize) {
+        if (v.type !of EmptyExpr) self:.expr(v.type);
+        if (v.value !of EmptyExpr) {
+            if (pad != 0us) {
+                if let Ok(eq) = self.find(self.index(v.name), self._src.len, "=") self:.padAt(pad, eq);
+            }
+
+            self:.expr(v.value, value-> true);
+        }
+    }
+
+    /*!
+     * ====================================================================================================
+     * ===================================          EXPRESSIONS          ==================================
+     * ====================================================================================================
+     */
+
+    /**
+     * Write the expression `e`, its string literals split when `value` and
+     * they overflow
+     */
+    fn expr(mut self, e: &Expression, value: bool = false) {
+        match e {
+            b: &BlockExpr => self:.block(b);
+            c: &ConditionalExpr => self:.ifChain(c);
+            c: &ConditionalLetExpr => self:.ifChain(c);
+            w: &WhileLoopExpr => {
+                if (w.test !of EmptyExpr) self:.expr(w.test);
+                self:.loopBody(w.block);
+            }
+            w: &WhileLetLoopExpr => {
+                self:.expr(w.test);
+                if (w.guard !of EmptyExpr) self:.expr(w.guard);
+                self:.loopBody(w.block);
+            }
+            f: &ForLoopExpr => {
+                for v in f.vars {
+                    self:.expr(v);
+                }
+
+                self:.expr(f.iter);
+                self:.loopBody(f.block);
+            }
+            m: &MatcherExpr => self:.matcher(m);
+            b: &BinaryExpr => self:.binary(b, value);
+            m: &MultOperatorExpr => {
+                self:.expr(m.left);
+                if (!m.end.isEof) self:.list(self.index(m.loc), m.rights, value-> m.loc.str == "(");
+            }
+            t: &TemplateCallExpr => {
+                self:.expr(t.left);
+                let bang = self.index(t.loc);
+                if (self._src.isTok(bang + 1us, "{")) {
+                    self:.list(bang + 1us, t.rights);
+                } else {
+                    for r in t.rights {
+                        self:.expr(r);
+                    }
+                }
+            }
+            n: &NamedExpr => self:.expr(n.value, value-> true);
+            l: &ListExpr => {
+                if (l.params.len != 0us) self:.list(self.index(l.loc), l.params, value-> true);
+            }
+            l: &ListMapExpr => {
+                let mut items: [&Expression] = [];
+                for k in 0us .. l.keys.len {
+                    items ~= [l.keys[k], l.values[k]];
+                }
+
+                self:.list(self.index(l.loc), items, pairs-> true);
+            }
+            m: &MatchListFilterExpr => {
+                if (m.params.len != 0us) self:.list(self.index(m.loc), m.params);
+            }
+            l: &LambdaExpr => self:.lambda(l);
+            v: &VarDeclExpr => {
+                if (v.type !of EmptyExpr) self:.expr(v.type);
+                if (v.value !of EmptyExpr) self:.expr(v.value, value-> true);
+            }
+            p: &PatternVarDeclExpr => {
+                self:.expr(p.pattern);
+                self:.expr(p.value, value-> true);
+            }
+            s: &SetExpr => {
+                for c in s.content {
+                    self:.expr(c);
+                }
+            }
+            r: &ReturnExpr => self:.expr(r.value, value-> true);
+            t: &ThrowExpr => self:.expr(t.value, value-> true);
+            b: &BreakExpr => self:.expr(b.value, value-> true);
+            y: &YieldExpr => self:.expr(y.value, value-> true);
+            p: &PanicExpr => self:.expr(p.msg, value-> true);
+            a: &AssertExpr => {
+                let open = self.index(a.loc) + 1us;
+                let mut items: [&Expression] = copy [a.test];
+                if (a.msg !of EmptyExpr) items ~= [a.msg];
+                if (self._src.isTok(open, "(")) self:.list(open, items, value-> true);
+            }
+            m: &MemoryExpr => self:.expr(m.content);
+            u: &UnaryExpr => self:.expr(u.value);
+            t: &TryExpr => self:.expr(t.value);
+            c: &CastExpr => {
+                self:.expr(c.type);
+                self:.expr(c.value);
+            }
+            c: &CteExpr => self:.expr(c.value);
+            d: &DecoratedTypeExpr => self:.expr(d.content);
+            r: &RangeTypeExpr => self:.expr(r.type);
+            p: &PragmaExpr => {
+                let n = self.index(p.name);
+                if (self._src.isTok(n + 1us, "(") && p.params.len != 0us) self:.list(n + 1us, p.params);
+            }
+            s: &SpawnExpr => self:.expr(s.value);
+            a: &AwaitExpr => self:.expr(a.value);
+            l: &LazyExpr => self:.expr(l.value);
+            u: &UnsafeExpr => self:.expr(u.value);
+            a: &AtomicExpr => {
+                if (a.monitor !of EmptyExpr) self:.expr(a.monitor);
+                self:.expr(a.value);
+            }
+            s: &StringExpr => {
+                if (value && s.suffix.isEof && !s.isFormat && s.loc.str == "\"") {
+                    let i = self.index(s.loc);
+                    if (!hasLineBreak(self._src.at(i))) self._roles[i] = Role::SPLIT;
+                }
+            }
+        }
+    }
+
+    /**
+     * Write the body `b` of a loop
+     */
+    fn loopBody(mut self, b: &Expression) {
+        match b {
+            bl: &BlockExpr => self:.block(bl);
+            _ => self:.expr(b);
+        }
+    }
+
+    /**
+     * Write the `if` `c` and its `else`s, their blocks on a line if they all
+     * were written on one and the whole fits
+     */
+    fn ifChain(mut self, c: &Expression) {
+        let mut inline = true;
+        let mut cur = c;
+        loop {
+            let mut body = cur;
+            let mut else_: &Expression = EMPTY_EXPR;
+            match cur {
+                x: &ConditionalExpr => {
+                    body = x.block;
+                    else_ = x.else_;
+                }
+                x: &ConditionalLetExpr => {
+                    body = x.block;
+                    else_ = x.else_;
+                }
+            }
+
+            if let b: &BlockExpr = body {
+                if (!self.isInline(b)) inline = false;
+            } else inline = false;
+
+            if (else_ of EmptyExpr) break;
+            cur = else_;
+        }
+
+        let mode = if (inline) { BlockMode::LINE } else { BlockMode::AUTO };
+        if (inline) self:.open(DocKind::GROUP, self.first(c));
+        match c {
+            x: &ConditionalExpr => self:.conditional(x.test, EMPTY_EXPR, x.block, x.else_, mode);
+            x: &ConditionalLetExpr => self:.conditional(x.test, x.guard, x.block, x.else_, mode);
+        }
+
+        if (inline) {
+            self:.flushTo(self.last(c) + 1us);
+            self:.close();
+        }
+    }
+
+    /**
+     * Write an `if`, its body on the line of its test if it fits when it is
+     * not a block, and its `else`
+     */
+    fn conditional(mut self, test: &Expression, guard: &Expression, body: &Expression, else_: &Expression, mode: BlockMode) {
+        self:.expr(test);
+        if (guard !of EmptyExpr) self:.expr(guard);
+
+        let braced = self.isBraced(body);
+        if (braced) {
+            if let b: &BlockExpr = body {
+                self:.block(b, mode-> mode);
+            }
+        } else {
+            self:.unbraced(body);
+        }
+
+        if (else_ of EmptyExpr) return;
+
+        let elseTok = self.start(else_) - 1us;
+        if (!self._src.isTok(elseTok, "else")) return;
+        self:.flushTo(elseTok);
+        self:.sepAt(if (braced) { Sep::SPACE } else { Sep::HARD }, elseTok);
+        self:.tok(elseTok);
+        match else_ {
+            c: &ConditionalExpr => self:.conditional(c.test, EMPTY_EXPR, c.block, c.else_, mode);
+            c: &ConditionalLetExpr => self:.conditional(c.test, c.guard, c.block, c.else_, mode);
+            _ => {
+                if let b: &BlockExpr = else_ && self.isBraced(else_) {
+                    self:.block(b, mode-> mode);
+                } else {
+                    self:.unbraced(else_);
+                }
+            }
+        }
+    }
+
+    /**
+     * Write the body `body` of an `if` that is not a block: on the line of its
+     * test if it fits or if it is itself a `match`, a loop or an `if`,
+     * indented on the next one otherwise
+     */
+    fn unbraced(mut self, body: &Expression) {
+        let s = self.start(body);
+        self:.flushTo(s);
+        if (body of MatcherExpr || body of ForLoopExpr || body of WhileLoopExpr || body of WhileLetLoopExpr
+            || body of ConditionalExpr || body of ConditionalLetExpr) {
+            self:.sepAt(Sep::SPACE, s);
+            self:.expr(body);
+            return;
+        }
+
+        self:.openHere(DocKind::GROUP);
+        self:.indent();
+        self:.sepAt(Sep::LINE, s);
+        self:.expr(body);
+        self:.flushTo(self.last(body) + 1us);
+        self:.dedent();
+        self:.close();
+    }
+
+    fn isBraced(self, e: &Expression)-> bool {
+        if let b: &BlockExpr = e {
+            return self._src.isTok(self.blockOpen(b), "{");
+        }
+
+        false
+    }
+
+    /**
+     * Write the `match` `m`, a line for each arm, the `=>` of the consecutive
+     * single line arms aligned
+     */
+    fn matcher(mut self, m: &MatcherExpr) {
+        if (m.value !of EmptyExpr) self:.expr(m.value);
+        if (m.matchers.len == 0us) return;
+
+        let mut starts: [usize] = [];
+        for l in m.matchers {
+            starts ~= [self.start(l.filter)];
+        }
+
+        let open = starts[0us] - 1us;
+        if (!self._src.isTok(open, "{")) return;
+        let close = self._src.partners[open];
+
+        let mut arrows: [(usize)?] = [];
+        for k in 0us .. m.matchers.len {
+            let e = if (k + 1us < starts.len) { starts[k + 1us] } else { close };
+            let l = m.matchers[k];
+            let mut arrow = self.find(starts[k], e, "=>");
+            if (self.isMultiLineValue(l.value)) arrow = none;
+            arrows ~= [arrow];
+        }
+
+        self:.flushTo(open);
+        self:.sepAt(Sep::SPACE, open);
+        self:.tok(open);
+        self:.indent();
+        let pads = self.pads(starts, arrows, close);
+        for k in 0us .. m.matchers.len {
+            let l = m.matchers[k];
+            self:.sepAt(Sep::HARD, starts[k], blank-> k != 0us);
+            self:.expr(l.filter);
+            if (l.guard !of EmptyExpr) self:.expr(l.guard);
+            if (pads[k] != 0us) {
+                if let Ok(a) = arrows[k] self:.padAt(pads[k], a);
+            }
+
+            let e = if (k + 1us < starts.len) { starts[k + 1us] } else { close };
+            let arrow = self.find(starts[k], e, "=>");
+            if let Ok(a) = arrow && !self.isBraced(l.value) {
+                self:.flushTo(a + 1us);
+                self:.indent();
+                self:.expr(l.value, value-> true);
+                self:.flushTo(e);
+                self:.dedent();
+            } else {
+                self:.expr(l.value, value-> true);
+            }
+
+            self:.flushTo(e);
+        }
+
+        self:.flushTo(close);
+        self:.closingGap(close);
+        self:.dedent();
+        self:.sepAt(Sep::HARD, close);
+        self:.tok(close);
+    }
+
+    /**
+     * @returns: whether the value `v` of an arm is written on several lines
+     */
+    fn isMultiLineValue(self, v: &Expression)-> bool {
+        if let b: &BlockExpr = v {
+            if (self._src.isTok(self.blockOpen(b), "{")) return !self.isInline(b);
+        }
+
+        false
+    }
+
+    /**
+     * Write the binary expression `b`: the operands of a chain of operators
+     * of a same precedence on a line if they fit, each on its own line
+     * starting with its operator otherwise, aligned on the first one
+     */
+    fn binary(mut self, b: &BinaryExpr, value: bool) {
+        let op = b.loc.str;
+        if (op == "." || op == ":." || op == "::") {
+            self:.expr(b.left);
+            self:.expr(b.right);
+            return;
+        }
+
+        if (isAssign(op)) {
+            self:.expr(b.left);
+            self:.expr(b.right, value-> true);
+            return;
+        }
+
+        if (op == ".." || op == "...") {
+            self:.expr(b.left);
+            self:.expr(b.right);
+            return;
+        }
+
+        let level = levelOf(op);
+        let mut operands: [&Expression] = copy [b.right];
+        let mut ops: [&Word] = copy [b.loc];
+        let mut cur = b;
+        loop {
+            if let l: &BinaryExpr = cur.left {
+                if (levelOf(l.loc.str) == level && !self.isParenthesized(self.index(cur.loc), l)) {
+                    operands = [l.right] ~ operands;
+                    ops = [l.loc] ~ ops;
+                    cur = l;
+                    continue;
+                }
+            }
+
+            break;
+        }
+
+        let left = cur.left;
+        operands = [left] ~ operands;
+        let isConcat = op == "~";
+        let s = self.first(left);
+        self:.flushTo(s);
+        self:.open(DocKind::ALIGN, s);
+        self:.openHere(DocKind::FILL);
+        self:.openHere(DocKind::CONCAT);
+        self:.operand(left, isConcat && value);
+        for k in 0us .. ops.len {
+            let o = self.index(ops[k]);
+            self:.flushTo(o);
+            self:.gap(o, all-> false);
+            self:.close();
+            self:.openHere(DocKind::CONCAT);
+            self:.sepAt(Sep::NONE, o);
+            self:.operand(operands[k + 1us], isConcat && value);
+        }
+
+        self:.flushTo(self.last(b) + 1us);
+        self:.close();
+        self:.close();
+        self:.close();
+    }
+
+    /**
+     * Write the operand `e` of a chain, a string literal split when `value`
+     * being aligned on the chain
+     */
+    fn operand(mut self, e: &Expression, value: bool) {
+        self:.expr(e, value-> value);
+        if (value) {
+            if let s: &StringExpr = e {
+                let i = self.index(s.loc);
+                if (self._roles[i] == Role::SPLIT && !self.isParenthesizedAt(i)) self._roles[i] = Role::SPLIT_CHAIN;
+            }
+        }
+    }
+
+    /**
+     * @returns: whether the token `i` is right after a parenthesis
+     */
+    fn isParenthesizedAt(self, i: usize)-> bool {
+        i > 0us && self._src.isTok(i - 1us, "(") && !self.isCallParen(i - 1us)
+    }
+
+    /**
+     * @returns: whether the left operand `l` of the operator `op` is written
+     * between parentheses
+     */
+    fn isParenthesized(self, op: usize, l: &BinaryExpr)-> bool {
+        op > 0us && self._src.isTok(op - 1us, ")") && self._src.partners[op - 1us] < self.first(l)
+    }
+
+    fn lambda(mut self, l: &LambdaExpr) {
+        let at = self.index(l.loc);
+        if (self._src.isTok(at, "|")) {
+            let mut j = at + 1us;
+            while (j < self._src.len && !self._src.isTok(j, "|")) {
+                if (self._src.isTok(j, "(") || self._src.isTok(j, "[") || self._src.isTok(j, "{")) j = self._src.partners[j];
+                j += 1us;
+            }
+
+            if (j < self._src.len) self._roles[j] = Role::LAMBDA_CLOSE;
+        }
+
+        for p in l.proto.params if p.type !of EmptyExpr {
+            self:.expr(p.type);
+        }
+
+        if (l.proto.retType !of EmptyExpr) self:.expr(l.proto.retType);
+        self:.expr(l.body, value-> true);
+    }
+
+    /**
+     * Write the list opened by the bracket `open`, whose items are `items`:
+     * on a line if it fits, broken otherwise
+     */
+    fn list(mut self, open: usize, items: [&Expression], value: bool = false, pairs: bool = false) {
+        if (open >= self._src.len) return;
+        let close = self._src.partners[open];
+        if (close == open || items.len == 0us) {
+            for it in items {
+                self:.expr(it, value-> value);
+            }
+
+            return;
+        }
+
+        let bounds = self.commas(open, close);
+        let step = if (pairs) { 2us } else { 1us };
+        if (bounds.len * step != items.len) {
+            for it in items {
+                self:.expr(it, value-> value);
+            }
+
+            return;
+        }
+
+        let mut named = bounds.len;
+        if (!pairs) {
+            for k in 0us .. items.len {
+                if (items[k] of NamedExpr) {
+                    named = k;
+                    break;
+                }
+            }
+        }
+
+        self:.flushTo(open);
+        self:.open(DocKind::LIST, open, n-> named);
+        self:.openHere(DocKind::CONCAT);
+        self:.tok(open);
+        self:.close();
+        for k in 0us .. bounds.len {
+            let (s, e) = bounds[k];
+            self:.sepAt(Sep::NONE, s);
+            self:.openHere(DocKind::CONCAT);
+            for j in 0us .. step {
+                self:.expr(items[k * step + j], value-> value);
+            }
+
+            self:.flushTo(e + 1us);
+            self:.gap(e + 1us, all-> false);
+            self:.close();
+        }
+
+        self:.openHere(DocKind::CONCAT);
+        self:.flushTo(close);
+        self:.gap(close, all-> true);
+        self:.sepAt(Sep::NONE, close);
+        self:.tok(close);
+        self:.close();
+        self:.close();
+    }
+
+    /**
+     * @returns: the tokens of each item of the list between the brackets
+     * `open` and `close`, its trailing comma included
+     */
+    fn commas(self, open: usize, close: usize)-> [(usize, usize)] {
+        let mut res: [(usize, usize)] = [];
+        let mut s = open + 1us;
+        let mut j = open + 1us;
+        while (j < close) {
+            let t = self._src.at(j);
+            if (t == "(" || t == "[" || t == "{" || t == ":[") {
+                j = self._src.partners[j] + 1us;
+                continue;
+            }
+
+            if (t == ",") {
+                res ~= [(s, j)];
+                s = j + 1us;
+            }
+
+            j += 1us;
+        }
+
+        if (s < close) res ~= [(s, close - 1us)];
+        res
+    }
+
+    /*!
+     * ====================================================================================================
+     * ===================================          POSITIONS          ====================================
+     * ====================================================================================================
+     */
+
+    /**
+     * @returns: the token of `w`, or the last one starting before it
+     */
+    fn index(self, w: &Word)-> usize {
+        if let Ok(i) = self._src.find(w) return i;
+        let mut lo = 0us;
+        let mut hi = self._src.len;
+        while (lo + 1us < hi) {
+            let mid = (lo + hi) / 2us;
+            if (self._src.starts[mid] <= w.seek) lo = mid;
+            else hi = mid;
+        }
+
+        lo
+    }
+
+    /**
+     * @returns: the first token of `e` the tree knows of
+     */
+    fn first(self, e: &Expression)-> usize {
+        match e {
+            b: &BinaryExpr => return self.first(b.left);
+            m: &MultOperatorExpr => return self.first(m.left);
+            t: &TemplateCallExpr => return self.first(t.left);
+            n: &NamedExpr => return self.index(n.name);
+            t: &TryExpr => return self.first(t.value);
+            m: &MacroCallExpr => return self.first(m.who);
+            p: &PathExpr => {
+                if (p.isRoot || p.left of EmptyExpr) return self.index(p.loc);
+                return self.first(p.left);
+            }
+            v: &VarDeclExpr => {
+                let mut f = self.index(v.loc);
+                if (!v.isMutOrDmut.isEof && self.index(v.isMutOrDmut) < f) f = self.index(v.isMutOrDmut);
+                if (!v.isLazyOrRef.isEof && self.index(v.isLazyOrRef) < f) f = self.index(v.isLazyOrRef);
+                return f;
+            }
+            c: &ConditionalExpr => {
+                if (!c.isCte.isEof) return self.index(c.isCte);
+            }
+            f: &ForLoopExpr => {
+                if (!f.isCte.isEof) return self.index(f.isCte);
+            }
+            b: &BlockExpr => {
+                let open = self.blockOpen(b);
+                if (self._src.isTok(open, "{")) return open;
+                for c in b.content if c !of EmptyExpr {
+                    return self.first(c);
+                }
+            }
+        }
+
+        self.index(e.loc)
+    }
+
+    /**
+     * @returns: the last token of `e`, the parentheses around it excluded
+     */
+    fn last(self, e: &Expression)-> usize {
+        match e {
+            b: &BinaryExpr => return self.last(b.right);
+            m: &MultOperatorExpr => {
+                if (!m.end.isEof) return self.index(m.end);
+                return self.last(m.left);
+            }
+            t: &TemplateCallExpr => {
+                let bang = self.index(t.loc);
+                if (self._src.isTok(bang + 1us, "{")) return self._src.partners[bang + 1us];
+                if (t.rights.len != 0us) return self.last(t.rights[$ - 1us]);
+                return bang;
+            }
+            n: &NamedExpr => return self.last(n.value);
+            p: &PathExpr => return self.last(p.right);
+            v: &VarDeclExpr => {
+                if (v.value !of EmptyExpr) return self.last(v.value);
+                if (v.type !of EmptyExpr) return self.last(v.type);
+                return self.index(v.name);
+            }
+            p: &PatternVarDeclExpr => return self.last(p.value);
+            s: &SetExpr => {
+                if (s.content.len != 0us) return self.last(s.content[$ - 1us]);
+            }
+            r: &ReturnExpr => return self.lastOr(r.value, r.loc);
+            t: &ThrowExpr => return self.lastOr(t.value, t.loc);
+            b: &BreakExpr => return self.lastOr(b.value, b.loc);
+            y: &YieldExpr => return self.lastOr(y.value, y.loc);
+            p: &PanicExpr => return self.lastOr(p.msg, p.loc);
+            a: &AssertExpr => return self.closing(self.index(a.loc) + 1us);
+            m: &MemoryExpr => return self.lastOr(m.content, m.loc);
+            u: &UnaryExpr => return self.last(u.value);
+            c: &CastExpr => {
+                let f = self.first(c.value);
+                if (f > 0us && self._src.isTok(f - 1us, "(")) return self.closing(f - 1us);
+                return self.last(c.value);
+            }
+            c: &CteExpr => return self.last(c.value);
+            d: &DecoratedTypeExpr => return self.last(d.content);
+            r: &RangeTypeExpr => return self.last(r.type);
+            p: &PragmaExpr => return self.closing(self.index(p.name) + 1us);
+            s: &SpawnExpr => return self.last(s.value);
+            a: &AwaitExpr => return self.last(a.value);
+            l: &LazyExpr => return self.last(l.value);
+            u: &UnsafeExpr => return self.last(u.value);
+            a: &AtomicExpr => return self.last(a.value);
+            l: &ListExpr => return self.index(l.end);
+            l: &ListMapExpr => return self.index(l.end);
+            m: &MatchListFilterExpr => return self.index(m.end);
+            m: &MatchOptionFilterExpr => return self.closing(self.index(m.loc) + 1us);
+            l: &LambdaExpr => return self.last(l.body);
+            b: &BlockExpr => {
+                if let Ok(x) = self._src.find(b.end) return x;
+                for j in 0us .. b.content.len {
+                    let c = b.content[b.content.len - 1us - j];
+                    if (c !of EmptyExpr) return self.last(c);
+                }
+            }
+            c: &ConditionalExpr => return if (c.else_ of EmptyExpr) { self.last(c.block) } else { self.last(c.else_) };
+            c: &ConditionalLetExpr => return if (c.else_ of EmptyExpr) { self.last(c.block) } else { self.last(c.else_) };
+            w: &WhileLoopExpr => return self.last(w.block);
+            w: &WhileLetLoopExpr => return self.last(w.block);
+            f: &ForLoopExpr => return self.last(f.block);
+            m: &MatcherExpr => {
+                if (m.matchers.len != 0us) return self.closing(self.start(m.matchers[0us].filter) - 1us);
+            }
+            f: &FunctionPtrTypeExpr => return self.last(f.retType);
+            f: &FutureTypeExpr => return self.last(f.retType);
+            a: &AsyncTypeExpr => return self.last(a.retType);
+            y: &YieldTypeExpr => return self.last(y.retType);
+            t: &TypeOfExpr => return self.last(t.value);
+            s: &SliceForAllocatorExpr => return self.closing(self.index(s.loc));
+            m: &MapForAllocatorExpr => return self.closing(self.index(m.loc));
+            s: &SliceAllocatorExpr => return self.closing(self.index(s.loc));
+        }
+
+        self.index(e.loc)
+    }
+
+    fn lastOr(self, e: &Expression, loc: &Word)-> usize {
+        if (e of EmptyExpr) return self.index(loc);
+        self.last(e)
+    }
+
+    /**
+     * @returns: the bracket closing the bracket `i`, `i` if it is not one
+     */
+    fn closing(self, i: usize)-> usize {
+        if (i < self._src.len) return self._src.partners[i];
+        i
+    }
+
+    /**
+     * @returns: the first token of `e`, the parentheses around it included
+     */
+    fn start(self, e: &Expression)-> usize {
+        let mut s = self.first(e);
+        while (s > 0us && self._src.isTok(s - 1us, "(") && self._src.partners[s - 1us] != s - 1us && !self.isCallParen(s - 1us)) {
+            s -= 1us;
+        }
+
+        s
+    }
+
+    /**
+     * @returns: whether the parenthesis `p` opens the arguments of a call
+     */
+    fn isCallParen(self, p: usize)-> bool {
+        if (p == 0us) return false;
+        let t = self._src.at(p - 1us);
+        if (t == ")" || t == "]" || t == "}") return true;
+        let w = self._src.words[p - 1us];
+        w.isName || t == "self" || t == "super" || t == "assert" || t == "typeof"
+    }
+
+    /**
+     * @returns: the first token of each item, its anchor being `anchors[k]`, of the
+     * tokens `lo .. hi`, an item starting after a `;` or a `}`
+     */
+    fn starts(self, anchors: [usize], lo: usize, hi: usize)-> [usize] {
+        let mut bounds: [usize] = copy [lo];
+        let mut j = lo;
+        while (j < hi) {
+            let t = self._src.at(j);
+            if (t == "(" || t == "[" || t == ":[") {
+                j = self._src.partners[j] + 1us;
+                continue;
+            }
+
+            if (t == "{") {
+                let close = self._src.partners[j];
+                if (close <= j) {
+                    j += 1us;
+                    continue;
+                }
+
+                let isAttr = j > 0us && self._src.isTok(j - 1us, "@");
+                if (!isAttr && close + 1us <= hi) bounds ~= [close + 1us];
+                j = close + 1us;
+                continue;
+            }
+
+            if (t == ";") bounds ~= [j + 1us];
+            j += 1us;
+        }
+
+        let mut res: [usize] = [];
+        let mut b = 0us;
+        for a in anchors {
+            while (b + 1us < bounds.len && bounds[b + 1us] <= a) { b += 1us; }
+            let mut s = bounds[b];
+            if (res.len != 0us && s <= res[$ - 1us]) s = a;
+            res ~= [s];
+        }
+
+        res
+    }
+
+    /**
+     * @returns: the first token written `s` of the tokens `from .. to` outside of
+     * brackets
+     */
+    fn find(self, from: usize, to: usize, s: [c8])-> (usize)? {
+        let mut j = from;
+        while (j < to && j < self._src.len) {
+            let t = self._src.at(j);
+            if (t == s) return j?;
+            if ((t == "(" || t == "[" || t == "{" || t == ":[") && self._src.partners[j] > j) {
+                j = self._src.partners[j] + 1us;
+                continue;
+            }
+
+            j += 1us;
+        }
+
+        none
+    }
+
+    /**
+     * @returns: the width of the tokens `a .. b` written on a line, none if
+     * they cannot be, holding a comment or a line break
+     */
+    fn flatWidth(self, a: usize, b: usize)-> (usize)? {
+        if (b < a || b >= self._src.len) return none;
+        let mut w = 0us;
+        for i in a ... b {
+            if (i > a) {
+                if (self._src.gaps[i].comments.len != 0us) return none;
+                if (self.spaced(i - 1us, i) || self.isInsideBlock(i - 1us, i)) w += 1us;
+            }
+
+            let t = self._src.at(i);
+            if (hasLineBreak(t)) return none;
+            w += source::width(t);
+        }
+
+        w?
+    }
+
+    /**
+     * @returns: the width of the comments ending the line of the token
+     * preceding the token `next`
+     */
+    fn trailingWidth(self, next: usize)-> usize {
+        if (next > self._src.len) return 0us;
+        let mut w = 0us;
+        for c in self._src.gaps[next].comments {
+            if (c.breaks != 0u32 || c.isRaw) break;
+            w += 1us + source::width(c.text);
+        }
+
+        w
+    }
+
+    /**
+     * @returns: whether the tokens `i` and `j` are the brace of a block and
+     * its content, spaced when the block is on a line
+     */
+    fn isInsideBlock(self, i: usize, j: usize)-> bool {
+        if (self._src.isTok(i, "{") && !self._src.isTok(j, "}")) return self.isBlockBrace(i);
+        if (self._src.isTok(j, "}") && !self._src.isTok(i, "{")) return self.isBlockBrace(self._src.partners[j]);
+        false
+    }
+
+    fn isBlockBrace(self, open: usize)-> bool {
+        if (open == 0us) return true;
+        let p = self._src.at(open - 1us);
+        p != "!" && p != "@" && p != "::"
+    }
+
+    /*!
+     * ====================================================================================================
+     * ====================================          WRITING          =====================================
+     * ====================================================================================================
+     */
+
+    fn indent(mut self) {
+        self._b:.open(DocKind::INDENT, n-> INDENT);
+        self._depth += 1us;
+    }
+
+    fn dedent(mut self) {
+        self._b:.close();
+        self._depth -= 1us;
+    }
+
+    /**
+     * Open a group of kind `kind` starting with the token `at`, what comes
+     * before it written outside of it
+     */
+    fn open(mut self, kind: DocKind, at: usize, n: usize = 0us) {
+        self:.flushTo(at);
+        self:.gap(at, all-> true);
+        self:.separate(at);
+        self._sep = Sep::NONE;
+        self._afterComment = false;
+        self._forceHard = false;
+        self._b:.open(kind, n-> n);
+    }
+
+    fn openHere(mut self, kind: DocKind) {
+        self._b:.open(kind);
+    }
+
+    fn close(mut self) {
+        self._b:.close();
+    }
+
+    /**
+     * Separate the token `at` from the previous one by `sep`, an empty line of
+     * the source between them being kept if `blank`
+     */
+    fn sepAt(mut self, sep: Sep, at: usize, blank: bool = false) {
+        self:.flushTo(at);
+        if (self._cursor != at) return;
+        self._sep = sep;
+        self._blankOk = blank;
+    }
+
+    /**
+     * Separate the token `at` from the previous one by `n` spaces
+     */
+    fn padAt(mut self, n: usize, at: usize) {
+        self:.flushTo(at);
+        if (self._cursor != at) return;
+        self._sep = Sep::PAD;
+        self._pad = n;
+    }
+
+    /**
+     * Write the tokens up to `to`, excluded
+     */
+    fn flushTo(mut self, to: usize) {
+        let end = if (to > self._src.len) { self._src.len } else { to };
+        while (self._cursor < end) {
+            self:.tok(self._cursor);
+        }
+    }
+
+    /**
+     * Write the token `i`, after the tokens preceding it, the comments before
+     * it and its separator
+     */
+    fn tok(mut self, i: usize) {
+        if (i < self._cursor) return;
+        self:.flushTo(i);
+        self:.gap(i, all-> true);
+        self:.separate(i);
+        if (self._roles[i] == Role::SPLIT) {
+            self._b:.add(Doc::align(Doc::split(self._src.at(i), i)));
+        } else if (self._roles[i] == Role::SPLIT_CHAIN) {
+            self._b:.add(Doc::split(self._src.at(i), i));
+        } else {
+            self._b:.add(Doc::token(self._src.at(i), i, i));
+        }
+
+        self:.wrote(i + 1us);
+    }
+
+    /**
+     * Write `text` in place of the tokens `first .. last`
+     */
+    fn replace(mut self, first: usize, last: usize, text: [c8]) {
+        self:.flushTo(first);
+        self:.gap(first, all-> true);
+        self:.separate(first);
+        self._b:.add(Doc::token(text, first, last));
+        self:.wrote(last + 1us);
+    }
+
+    fn wrote(mut self, next: usize) {
+        self._cursor = next;
+        self._sep = Sep::AUTO;
+        self._blankOk = false;
+        self._forceHard = false;
+        self._afterComment = false;
+    }
+
+    /**
+     * Write the comments of the gap before the token `i`: the ones on the
+     * line of the previous token, and if `all` the ones on their own lines
+     */
+    fn gap(mut self, i: usize, all: bool) {
+        if (self._gapAt != i) {
+            self._gapAt = i;
+            self._gapDone = 0us;
+        }
+
+        let g = self._src.gaps[i];
+        let cs = g.comments;
+        while (self._gapDone < cs.len && cs[self._gapDone].breaks == 0u32 && !cs[self._gapDone].isRaw && i != 0us && !self._afterComment) {
+            let c = cs[self._gapDone];
+            self._b:.add(Doc::text(" " ~ c.text));
+            if (c.isLine) self._forceHard = true;
+            self._gapDone += 1us;
+        }
+
+        if (!all) return;
+        while (self._gapDone < cs.len) {
+            let c = cs[self._gapDone];
+            if (self._afterComment && self._commentSep == Sep::SPACE) {
+                self._b:.add(Doc::text(" "));
+            } else {
+                self:.lineBreak(c.breaks);
+            }
+
+            if (c.isRaw) {
+                self._b:.add(copy Doc(DocKind::RAW, text-> c.text));
+            } else {
+                self._b:.add(Doc::text(c.text));
+            }
+
+            self._gapDone += 1us;
+            let nextBreaks = if (self._gapDone < cs.len) { cs[self._gapDone].breaks } else { g.breaks };
+            self._afterComment = true;
+            self._forceHard = false;
+            self._commentSep = if (c.isLine || nextBreaks != 0u32) { Sep::HARD } else { Sep::SPACE };
+        }
+    }
+
+    /**
+     * Write the comments before the bracket `close` ending a block, an empty
+     * line of the source before each being kept
+     */
+    fn closingGap(mut self, close: usize) {
+        self._blankOk = true;
+        self:.gap(close, all-> true);
+        self._blankOk = false;
+    }
+
+    /**
+     * Write a line break, an empty line if the source had one there and it is kept
+     */
+    fn lineBreak(mut self, breaks: u32) {
+        if (self._blankOk && breaks >= 2u32) {
+            self._b:.add(Doc::mk(DocKind::BLANK));
+        } else {
+            self._b:.add(Doc::mk(DocKind::HARD));
+        }
+    }
+
+    /**
+     * Write the separator before the token `i`
+     */
+    fn separate(mut self, i: usize) {
+        if (i >= self._src.len) return;
+        let g = self._src.gaps[i];
+        if (self._afterComment) {
+            if (self._commentSep == Sep::HARD) self:.lineBreak(g.breaks);
+            else self._b:.add(Doc::text(" "));
+            self._afterComment = false;
+            return;
+        }
+
+        if (self._forceHard) {
+            self:.lineBreak(g.breaks);
+            self._forceHard = false;
+            return;
+        }
+
+        match self._sep {
+            Sep::AUTO => {
+                if (self._preserve && g.breaks != 0u32 && i != 0us) {
+                    self._b:.add(Doc::mk(DocKind::HARD));
+                } else if (i != 0us && self.spaced(i - 1us, i)) {
+                    self._b:.add(Doc::text(" "));
+                }
+            }
+            Sep::NONE  => {}
+            Sep::SPACE => self._b:.add(Doc::text(" "));
+            Sep::PAD   => self._b:.add(Doc::text(spaces(self._pad)));
+            Sep::LINE  => self._b:.add(Doc::mk(DocKind::LINE));
+            Sep::HARD  => self:.lineBreak(g.breaks);
+        }
+
+        self._sep = Sep::NONE;
+    }
+
+    /*!
+     * ====================================================================================================
+     * ====================================          SPACING          =====================================
+     * ====================================================================================================
+     */
+
+    /**
+     * @returns: whether the token `j` is written a space after the token `i`
+     */
+    fn spaced(self, i: usize, j: usize)-> bool {
+        let a = self._src.at(i);
+        let b = self._src.at(j);
+        if (self._roles[j] == Role::LAMBDA_CLOSE) return false;
+
+        if (b == "," || b == ";" || b == ")" || b == "]") return false;
+        if (a == "(" || a == "[" || a == ":[" || a == "@" || a == "." || a == ":." || a == "::") return false;
+        if (b == "." || b == ":.") return isKeyword(self._src.words[i], a) && !isValueKeyword(a);
+        if (b == "?" || b == "->" || b == ":") return false;
+        if (a == "->" || a == ":") return true;
+
+        if (self.isUnary(i)) return false;
+        if (a == "|" && self.isLambdaOpen(i)) return false;
+
+        if (b == "::") return !self.endsOperand(i) || isKeyword(self._src.words[i], a);
+        if (b == "!") {
+            if (isKeyword(self._src.words[i], a)) return !isBangKeyword(a);
+            return !self.endsOperand(i);
+        }
+
+        if (a == "!") return false;
+        if (b == "{") return a != "!" && a != "{";
+        if (a == "{") return false;
+        if (b == "}") return false;
+        if (a == "}") return true;
+        if (b == "(") {
+            if (self._roles[i] == Role::CTOR) return true;
+            if (a == ")" || a == "]") return false;
+            if (isTightKeyword(a)) return false;
+            if (isKeyword(self._src.words[i], a)) return true;
+            return !self.endsOperand(i);
+        }
+
+        if (b == "[") return !self.endsOperand(i) || (isKeyword(self._src.words[i], a) && !isValueKeyword(a));
+        if (b == "...") {
+            if (j + 1us < self._src.len) {
+                let n = self._src.at(j + 1us);
+                if (n == "}" || n == ")" || n == "," || n == "]") return false;
+            }
+        }
+
+        true
+    }
+
+    /**
+     * @returns: whether the token `i` is a unary operator
+     */
+    fn isUnary(self, i: usize)-> bool {
+        let a = self._src.at(i);
+        if (a != "-" && a != "&" && a != "*" && a != "!" && a != "&?" && a != "..") return false;
+        if (i == 0us) return true;
+        if (a == "!" && self.endsOperand(i - 1us)) return false;
+        !self.endsOperand(i - 1us)
+    }
+
+    fn isLambdaOpen(self, i: usize)-> bool {
+        i == 0us || !self.endsOperand(i - 1us)
+    }
+
+    /**
+     * @returns: whether the token `i` can end an operand
+     */
+    fn endsOperand(self, i: usize)-> bool {
+        let w = self._src.words[i];
+        let t = self._src.at(i);
+        if (t == ")" || t == "]" || t == "}" || t == "?" || t == "$") return true;
+        if (self._roles[i] == Role::LAMBDA_CLOSE) return false;
+        if (w.isKey) return isValueKeyword(t);
+        if (w.isToken) return false;
+        true
+    }
+}
+
+fn isKnown(w: (usize)?)-> bool {
+    if let Ok(_) = w return true;
+    false
+}
+
+fn isSome(r: (RedirectCtor)?)-> bool {
+    if let Ok(_) = r return true;
+    false
+}
+
+fn isAssign(op: [c8])-> bool {
+    op == "=" || op == "+=" || op == "-=" || op == "*=" || op == "/=" || op == "%=" || op == "~=" || op == "<<=" || op == ">>="
+}
+
+/**
+ * @returns: the precedence of the binary operator `op`
+ */
+fn levelOf(op: [c8])-> u32 {
+    if (op == "||") return 1u32;
+    if (op == "&&") return 2u32;
+    if (op == "<" || op == ">" || op == "<=" || op == ">=" || op == "!=" || op == "==" || op == "of" || op == "is" || op == "in"
+        || op == "!of" || op == "!is" || op == "!in" || op == "<=>" || op == "<!>") return 3u32;
+    if (op == "<<" || op == ">>") return 5u32;
+    if (op == "|" || op == "^" || op == "&") return 6u32;
+    if (op == "+" || op == "~" || op == "-") return 7u32;
+    if (op == "*" || op == "%" || op == "/") return 8u32;
+    9u32
+}
+
+fn isKeyword(w: &Word, t: [c8])-> bool {
+    w.isKey && t.len != 0us && ((t[0us] >= 'a' && t[0us] <= 'z') || t[0us] == '_' || t[0us] == '!')
+}
+
+/**
+ * @returns: whether the keyword `t` is written right before its parentheses
+ */
+fn isTightKeyword(t: [c8])-> bool {
+    t == "assert" || t == "typeof" || t == "sizeof" || t == "panic" || t == "self" || t == "super" || t == "__pragma"
+}
+
+/**
+ * @returns: whether the keyword `t` is followed by a `!` and its argument
+ */
+fn isBangKeyword(t: [c8])-> bool {
+    t == "cast" || t == "__version" || t == "__pragma" || t == "template"
+}
+
+/**
+ * @returns: whether the keyword `t` is a value
+ */
+fn isValueKeyword(t: [c8])-> bool {
+    t == "self" || t == "super" || t == "true" || t == "false" || t == "null" || t == "none" || t == "_"
+}
+
+fn isUse(d: &Declaration)-> bool {
+    d of UseDecl
+}
+
+fn hasLineBreak(text: [c8])-> bool {
+    for c in text if c == '\n' {
+        return true;
+    }
+
+    false
+}
+
+fn spaces(n: usize)-> [c8] {
+    copy [' ' ; n]
+}
