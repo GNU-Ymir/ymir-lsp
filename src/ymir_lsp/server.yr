@@ -72,9 +72,8 @@ pub class Server {
     // to be read again, by `Unit::key`
     let dmut _unindexed: [[c8] => Unit] = copy [];
 
-    // The change the declarations of the packages of the folders were last
-    // read after, by `Unit::key`
-    let dmut _indexed: [[c8] => u64] = copy [];
+    // The latest compilation of the packages of the folders, by `Unit::key`
+    let dmut _indexed: [[c8] => Compiled] = copy [];
 
     // The session of the compilation in progress, cancelled by a change
     let dmut _compiling: (&Session)? = none;
@@ -567,10 +566,7 @@ pub class Server {
         for key in copy [k for k, _ in self._unindexed] {
             if (self._received.get() > 0) return;
             if let Ok(u) = self._unindexed[key] {
-                if let Ok(_) = self:.compile(u, index-> false) {
-                    self._unindexed:.remove(key);
-                    self._indexed[key] = self._generation;
-                }
+                self:.indexed(u, background-> true);
             }
         }
     }
@@ -583,7 +579,7 @@ pub class Server {
         for dir in self._folders {
             for u in Unit::ofPackage(dir) {
                 let key = u.key();
-                if let Ok(g) = self._indexed[key] && (!self.changedSince(u, g)) continue;
+                if let Ok(c) = self._indexed[key] && (!self.changedSince(u, c.generation)) continue;
                 self._unindexed[key] = u;
             }
         }
@@ -607,7 +603,7 @@ pub class Server {
         }
 
         let unit = Unit::compiling(Path(doc.path));
-        let (p, thrown) = if let Ok(r) = self:.compile(unit, index-> true) { r } else { return none; };
+        let (p, thrown) = if let Ok(r) = self:.compile(unit, background-> false) { r } else { return none; };
 
         let dmut session = self:.sessionOf(unit);
         session:.enter();
@@ -628,11 +624,31 @@ pub class Server {
     }
 
     /**
-     * @returns: the compilation of `unit`, the open documents standing in for
-     * their files, and the error it threw if any; none if it was cancelled.
-     * The declarations of its modules replace the ones read before
+     * @returns: the compilation of the package `unit` after the latest change
+     * of the documents it reads, none if its compilation was cancelled, by any
+     * message if `background`
      */
-    fn compile(mut self, unit: Unit, index: bool)-> (&Parser, [&ErrorMsg])? {
+    fn indexed(mut self, unit: Unit, background: bool)-> (Compiled)? {
+        let key = unit.key();
+        if let Ok(c) = self._indexed[key] && (!self.changedSince(unit, c.generation)) {
+            self._unindexed:.remove(key);
+            return c?;
+        }
+
+        let (p, _) = if let Ok(r) = self:.compile(unit, background-> background) { r } else { return none; };
+        let c = Compiled(p, unit, "", self._generation);
+        self._indexed[key] = c;
+        self._unindexed:.remove(key);
+        c?
+    }
+
+    /**
+     * @returns: the compilation of `unit`, the open documents standing in for
+     * their files, and the error it threw if any; none if it was cancelled,
+     * by any message if `background`. The declarations of its modules replace
+     * the ones read before
+     */
+    fn compile(mut self, unit: Unit, background: bool)-> (&Parser, [&ErrorMsg])? {
         let dmut session = self:.sessionOf(unit);
 
         let dmut overlay: [Path => [c8]] = copy [];
@@ -640,10 +656,10 @@ pub class Server {
             overlay[Path(d.path)] = copy d.text;
         }
 
-        let dmut p = copy Parser::inSession(alias session, unit.root.toStr(), overlay-> overlay, index-> index);
+        let dmut p = copy Parser::inSession(alias session, unit.root.toStr(), overlay-> overlay, index-> true);
         atomic self {
             self._compiling = (alias session)?;
-            self._background = !index;
+            self._background = background;
         }
 
         let mut thrown: [&ErrorMsg] = [];
