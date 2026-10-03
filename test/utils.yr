@@ -3,9 +3,11 @@ in utils;
 use ymir_lsp::transport;
 
 use std::stream;
+use std::time::dur;
 
 /**
- * A transport reading `input` by chunks of at most `chunk` bytes, and keeping what is sent
+ * A transport reading `input` by chunks of at most `chunk` bytes, then `then`
+ * after a pause of `pause` milliseconds, and keeping what is sent
  */
 @final
 pub class MemoryTransport over Transport {
@@ -14,14 +16,26 @@ pub class MemoryTransport over Transport {
 
     let _chunk: usize;
 
+    let mut _then: [c8];
+
+    let _pause: u64;
+
     let dmut _output: &StringStream = copy StringStream();
 
-    pub self (input: [c8], chunk: usize = 4096us)
+    pub self (input: [c8], chunk: usize = 4096us, then: [c8] = "", pause: u64 = 0u64)
         with _input = input
         , _chunk = chunk
+        , _then = then
+        , _pause = pause
     {}
 
     pub over receive(mut self, max: usize)-> [c8] {
+        if (self._input.len == 0us && self._then.len != 0us) {
+            dur::sleep(dur::millis(self._pause));
+            self._input = self._then;
+            self._then = "";
+        }
+
         let mut n = if (max < self._chunk) { max } else { self._chunk };
         if (n > self._input.len) n = self._input.len;
 
