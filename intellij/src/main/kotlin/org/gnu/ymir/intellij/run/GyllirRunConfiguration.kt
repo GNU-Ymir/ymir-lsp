@@ -5,10 +5,10 @@ import com.intellij.execution.configurations.CommandLineState
 import com.intellij.execution.configurations.ConfigurationFactory
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.configurations.RunConfiguration
-import com.intellij.execution.configurations.RunConfigurationBase
 import com.intellij.execution.configurations.RunConfigurationOptions
 import com.intellij.execution.configurations.RunProfileState
 import com.intellij.execution.configurations.RuntimeConfigurationError
+import com.intellij.execution.executors.DefaultDebugExecutor
 import com.intellij.execution.process.KillableColoredProcessHandler
 import com.intellij.execution.process.ProcessHandler
 import com.intellij.execution.process.ProcessTerminatedListener
@@ -16,7 +16,12 @@ import com.intellij.execution.runners.ExecutionEnvironment
 import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.project.Project
 import com.intellij.util.execution.ParametersListUtil
+import com.redhat.devtools.lsp4ij.dap.DebugAdapterManager
+import com.redhat.devtools.lsp4ij.dap.configurations.DAPCommandLineState
+import com.redhat.devtools.lsp4ij.dap.configurations.DAPRunConfigurationBase
+import com.redhat.devtools.lsp4ij.dap.definitions.DebugAdapterServerDefinition
 import org.gnu.ymir.intellij.YmirSettings
+import org.gnu.ymir.intellij.debug.YmirDebugAdapterFactory
 import java.nio.file.Path
 
 class GyllirRunConfigurationOptions : RunConfigurationOptions() {
@@ -26,10 +31,11 @@ class GyllirRunConfigurationOptions : RunConfigurationOptions() {
 }
 
 /**
- * `gyllir <command> <arguments>` in the directory of a package.
+ * `gyllir <command> <arguments>` in the directory of a package, or, debugged,
+ * the program it runs under gdb, the debug adapter `YmirDebugAdapterFactory`.
  */
 class GyllirRunConfiguration(project: Project, factory: ConfigurationFactory, name: String) :
-    RunConfigurationBase<GyllirRunConfigurationOptions>(project, factory, name) {
+    DAPRunConfigurationBase<GyllirRunConfigurationOptions>(project, factory, name) {
 
     public override fun getOptions(): GyllirRunConfigurationOptions =
         super.getOptions() as GyllirRunConfigurationOptions
@@ -70,8 +76,21 @@ class GyllirRunConfiguration(project: Project, factory: ConfigurationFactory, na
 
     override fun getConfigurationEditor(): SettingsEditor<out RunConfiguration> = GyllirSettingsEditor(project)
 
-    override fun getState(executor: Executor, environment: ExecutionEnvironment): RunProfileState =
-        object : CommandLineState(environment) {
+    override fun getDebugAdapterServer(): DebugAdapterServerDefinition? =
+        DebugAdapterManager.getInstance().getDebugAdapterServerById(YmirDebugAdapterFactory.ID)
+
+    /** Whether the debug adapter runs the configuration: debugging what `run` or `test` runs. */
+    override fun canRun(executorId: String): Boolean =
+        executorId == DefaultDebugExecutor.EXECUTOR_ID && command != GyllirCommand.BUILD
+
+    override fun getState(executor: Executor, environment: ExecutionEnvironment): RunProfileState {
+        if (executor.id == DefaultDebugExecutor.EXECUTOR_ID) {
+            return (super.getState(executor, environment) as DAPCommandLineState).apply {
+                addConsoleFilters(GyllirLocationFilter(project, Path.of(workingDirectory)))
+            }
+        }
+
+        return object : CommandLineState(environment) {
             init {
                 addConsoleFilters(GyllirLocationFilter(project, Path.of(workingDirectory)))
             }
@@ -82,4 +101,5 @@ class GyllirRunConfiguration(project: Project, factory: ConfigurationFactory, na
                 return handler
             }
         }
+    }
 }
