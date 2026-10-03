@@ -46,16 +46,22 @@ intellijPlatform {
 }
 
 tasks {
-    // The TextMate bundle is read from the disk, so it ships beside the jar, not in it
+    // The TextMate bundle and the gdb script are read from the disk, so they ship beside the jar, not in it
     prepareSandbox {
         from(layout.projectDirectory.dir("textmate")) {
             into(intellijPlatform.projectName.map { "$it/textmate" })
+        }
+        from(layout.projectDirectory.dir("gdb")) {
+            into(intellijPlatform.projectName.map { "$it/gdb" })
         }
     }
 
     prepareTestSandbox {
         from(layout.projectDirectory.dir("textmate")) {
             into(intellijPlatform.projectName.map { "$it/textmate" })
+        }
+        from(layout.projectDirectory.dir("gdb")) {
+            into(intellijPlatform.projectName.map { "$it/gdb" })
         }
     }
 }
