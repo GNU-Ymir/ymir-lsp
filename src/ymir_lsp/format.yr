@@ -299,3 +299,169 @@ fn usePaths(m: &ModuleDecl)-> [[c8]] {
 
     res
 }
+
+/**
+ * @returns: the edits rewriting in their canonical form the top-level `use`
+ * declarations of `text`, the source of the file `path`, importing `add`, in
+ * the first ones following each other, and no longer `remove`; none if it
+ * does not parse, or if declarations to rewrite are not plain paths or hold
+ * a comment
+ */
+pub fn imports(path: [c8], text: [c8], add: [[[c8]]], remove: [[[c8]]])-> ([TextEdit])? {
+    {
+        let src = Source::read(path, text);
+        let dmut visitor = copy SyntaxVisitor::fromStr(path, text);
+        return rewriteUses(src, visitor:.read(), add, remove);
+    } catch {
+        _: &ErrorMsg => return none;
+    }
+}
+
+/**
+ * @returns: the path imported by the top-level `use` declaration of `text`,
+ * the source of the file `path`, whose path ends with the token starting at
+ * the offset `at`
+ */
+pub fn importAt(path: [c8], text: [c8], at: usize)-> ([[c8]])? {
+    {
+        let src = Source::read(path, text);
+        let dmut visitor = copy SyntaxVisitor::fromStr(path, text);
+        for d in visitor:.read().block.decls {
+            if let u: &UseDecl = d {
+                if let Ok(i) = src.find(uses::lastSegment(u)) && src.starts[i] == at {
+                    return uses::segments(u);
+                }
+            }
+        }
+    } catch {
+        _: &ErrorMsg => return none;
+    }
+
+    none
+}
+
+/**
+ * The top-level `use` declarations of a source following each other
+ */
+record UseRun {
+
+    // The tokens from the first `use` to the last `;`
+    pub let first: usize;
+    pub let last: usize;
+
+    // The path each declaration imports, none if it is not a plain path
+    pub let paths: [([[c8]])?];
+
+    pub self (first: usize, last: usize, paths: [([[c8]])?])
+        with first = first
+        , last = last
+        , paths = paths
+    {}
+}
+
+fn rewriteUses(src: &Source, m: &ModuleDecl, add: [[[c8]]], remove: [[[c8]]])-> ([TextEdit])? {
+    let runs = useRuns(src, m);
+    let mut added: [[[c8]]] = [];
+    for p in add if !runs.imports(p) {
+        added ~= [p];
+    }
+
+    if (runs.len == 0us) {
+        if (added.len == 0us) return ([])?;
+        let text = uses::canonical(added);
+        if (!m.name.isEof && src.isTok(0us, "in")) {
+            for i in 0us .. src.len if src.isTok(i, ";") {
+                return (copy [TextEdit(src.ends[i], src.ends[i], "\n\n" ~ text)])?;
+            }
+        }
+
+        return (copy [TextEdit(0us, 0us, text ~ "\n\n")])?;
+    }
+
+    let mut res: [TextEdit] = [];
+    for k in 0us .. runs.len {
+        let r = runs[k];
+        let mut kept: [[[c8]]] = [];
+        let mut changed = k == 0us && added.len != 0us;
+        let mut plain = true;
+        for p in r.paths {
+            if let Ok(segs) = p {
+                if (holds(remove, segs)) changed = true;
+                else kept ~= [segs];
+            } else plain = false;
+        }
+
+        if (!changed) continue;
+        if (!plain) return none;
+        for i in r.first + 1us ... r.last if src.gaps[i].comments.len != 0us {
+            return none;
+        }
+
+        if (k == 0us) kept ~= added;
+        if (kept.len != 0us) {
+            res ~= [TextEdit(src.starts[r.first], src.ends[r.last], uses::canonical(kept))];
+        } else {
+            let mut end = src.ends[r.last];
+            while (end < src.text.len && isSpace(src.text[end])) { end += 1us; }
+            res ~= [TextEdit(src.starts[r.first], end, "")];
+        }
+    }
+
+    res?
+}
+
+/**
+ * @returns: the runs of top-level `use` declarations of `m`, the tokens of `src`
+ */
+fn useRuns(src: &Source, m: &ModuleDecl)-> [UseRun] {
+    let mut res: [UseRun] = [];
+    let mut open = false;
+    let mut first = 0us;
+    let mut last = 0us;
+    let mut paths: [([[c8]])?] = [];
+    for d in m.block.decls {
+        if let u: &UseDecl = d {
+            if let Ok(i) = src.find(u.loc) {
+                let mut j = i;
+                while (j < src.len && !src.isTok(j, ";")) { j += 1us; }
+                if (!open) first = i;
+                open = true;
+                last = j;
+                paths ~= [uses::segments(u)];
+                continue;
+            }
+        }
+
+        if (open) res ~= [UseRun(first, last, paths)];
+        open = false;
+        paths = [];
+    }
+
+    if (open) res ~= [UseRun(first, last, paths)];
+    res
+}
+
+/**
+ * @returns: whether one of the declarations of `runs` imports `path`
+ */
+fn imports(runs: [UseRun], path: [[c8]])-> bool {
+    for r in runs {
+        for p in r.paths {
+            if let Ok(segs) = p && segs == path return true;
+        }
+    }
+
+    false
+}
+
+fn holds(paths: [[[c8]]], path: [[c8]])-> bool {
+    for p in paths if p == path {
+        return true;
+    }
+
+    false
+}
+
+fn isSpace(c: c8)-> bool {
+    c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
