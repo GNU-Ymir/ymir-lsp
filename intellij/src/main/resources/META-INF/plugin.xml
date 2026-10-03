@@ -26,6 +26,8 @@
         <postStartupActivity implementation="org.gnu.ymir.intellij.run.GyllirProjectActivity"/>
         <codeInsight.lineMarkerProvider language="textmate"
                                         implementationClass="org.gnu.ymir.intellij.run.YmirRunLineMarkerProvider"/>
+
+        <directoryIndexExcludePolicy implementation="org.gnu.ymir.intellij.project.GyllirExcludePolicy"/>
     </extensions>
 
     <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
