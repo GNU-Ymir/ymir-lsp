@@ -764,6 +764,7 @@ pub class Server {
         }
 
         if (!unit.prefix.isEmpty()) state::setPrefix(unit.prefix.toStr());
+        if (unit.standalone) state::activateStandalone();
         if (!unit.module.isEmpty()) state::insertPathFilter(unit.module);
         s:.exit();
 
