@@ -7,44 +7,161 @@ use std::config::_;
 use std::fs::{path, sys};
 
 /**
+ * A target of a package, as gyllir builds it from a `[targets.<name>]` table,
+ * or from the top-level fields of a package declaring none
+ */
+pub record Target {
+
+    pub let name: [c8];
+
+    // The root file of its sources
+    pub let root: Path;
+
+    // The root file of its tests, empty when it has none
+    pub let tests: Path;
+
+    pub let library: bool;
+
+    // The options it passes to gyc
+    pub let flags: [[c8]];
+
+    // The dependencies of its package it links, all of them when `all`
+    pub let dependencies: [[c8]];
+    pub let all: bool;
+
+    // The targets of its package it links
+    pub let links: [[c8]];
+
+    pub self (name: [c8], root: Path, tests: Path, library: bool, flags: [[c8]], dependencies: [[c8]] = [], all: bool = false, links: [[c8]] = [])
+        with name = name
+        , root = root
+        , tests = tests
+        , library = library
+        , flags = flags
+        , dependencies = dependencies
+        , all = all
+        , links = links
+    {}
+
+    /**
+     * @returns: whether it links the dependency `name` of its package
+     */
+    pub fn selects(self, name: [c8])-> bool {
+        self.all || name in self.dependencies
+    }
+}
+
+/**
+ * The options of gyc a target sets in its flags
+ */
+pub record Flags {
+
+    // Its `-I`, from the directory of its package
+    pub let includes: [Path];
+
+    // Its `-fversion=`
+    pub let versions: [[c8]];
+
+    // Its `-iprefix`, empty if none
+    pub let prefix: Path;
+
+    // Whether it sets `-nostdinc`
+    pub let standalone: bool;
+
+    pub self (includes: [Path], versions: [[c8]], prefix: Path, standalone: bool)
+        with includes = includes
+        , versions = versions
+        , prefix = prefix
+        , standalone = standalone
+    {}
+}
+
+/**
  * @returns: the compilation of `file` in the package `dir` configured by
- * `cfg`, none if it is in neither its source nor its test directory
+ * `cfg`, by the target whose source or test directory is the deepest one
+ * holding it, none if there is none
  */
 pub fn inPackage(dir: Path, cfg: &Config, file: Path)-> (Unit)? {
-    let srcRoot = Unit::sourceRoot(dir, cfg);
-    let deps = dependencies(dir, dir, cfg, []);
-    let versions = versions(cfg);
-    let prefix = Unit::stdPrefix(dir, cfg);
+    let ts = targets(dir, cfg);
+    let mut res: (Unit)? = none;
+    let mut depth = 0us;
+    for t in ts {
+        let srcDir = t.root.parent();
+        if (srcDir.isPrefix(file) && srcDir.parts().len > depth) {
+            res = unitOf(dir, cfg, ts, t, false, file.removePrefix(srcDir).stripExtension())?;
+            depth = srcDir.parts().len;
+        }
 
-    let testRoot = testRoot(dir, cfg);
-    let testDir = testRoot.parent();
-    if (testDir.isPrefix(file)) {
-        return Unit(testRoot, module-> file.removePrefix(testDir).stripExtension(), includes-> deps ~ [srcRoot], versions-> versions, prefix-> prefix)?;
+        let testDir = t.tests.parent();
+        if (!t.tests.isEmpty() && testDir.isPrefix(file) && testDir.parts().len > depth) {
+            res = unitOf(dir, cfg, ts, t, true, file.removePrefix(testDir).stripExtension())?;
+            depth = testDir.parts().len;
+        }
     }
 
-    let srcDir = srcRoot.parent();
-    if (srcDir.isPrefix(file)) {
-        return Unit(srcRoot, module-> file.removePrefix(srcDir).stripExtension(), includes-> deps, versions-> versions, prefix-> prefix)?;
-    }
-
-    none
+    res
 }
 
 /**
  * @returns: the compilations of the whole package `dir` configured by `cfg`,
- * of its sources and of its tests, the ones whose root file exists
+ * of the sources and of the tests of its targets, the ones whose root file
+ * exists, once by root file
  */
 pub fn wholePackage(dir: Path, cfg: &Config)-> [Unit] {
-    let srcRoot = Unit::sourceRoot(dir, cfg);
-    let testRoot = testRoot(dir, cfg);
-    let deps = dependencies(dir, dir, cfg, []);
-    let versions = versions(cfg);
-    let prefix = Unit::stdPrefix(dir, cfg);
-
+    let ts = targets(dir, cfg);
+    let mut seen: [[c8]] = [];
     let mut res: [Unit] = [];
-    if (sys::isFile(srcRoot)) res ~= [Unit(srcRoot, includes-> deps, versions-> versions, prefix-> prefix)];
-    if (sys::isFile(testRoot)) res ~= [Unit(testRoot, includes-> deps ~ [srcRoot], versions-> versions, prefix-> prefix)];
+    for t in ts {
+        if (sys::isFile(t.root) && t.root.toStr() !in seen) {
+            seen = seen ~ [t.root.toStr()];
+            res ~= [unitOf(dir, cfg, ts, t, false, Path())];
+        }
+
+        if (!t.tests.isEmpty() && sys::isFile(t.tests) && t.tests.toStr() !in seen) {
+            seen = seen ~ [t.tests.toStr()];
+            res ~= [unitOf(dir, cfg, ts, t, true, Path())];
+        }
+    }
+
     res
+}
+
+/**
+ * @returns: the compilation of the sources of `t`, or of its tests when
+ * `tests`, a target of the package `dir` configured by `cfg` among `ts`
+ */
+fn unitOf(dir: Path, cfg: &Config, ts: [Target], t: Target, tests: bool, module: Path)-> Unit {
+    let fl = flags(dir, t.flags);
+    let mut includes = linked(dir, dir, cfg, ts, t, [], copy [t.name]);
+    if (tests) includes = includes ~ [t.root];
+
+    let prefix = if (fl.prefix.isEmpty()) { Unit::stdPrefix(dir, cfg) } else { fl.prefix };
+    Unit(if (tests) { t.tests } else { t.root }, module-> module, includes-> unique(includes) ~ fl.includes, versions-> fl.versions, prefix-> prefix, standalone-> fl.standalone)
+}
+
+/**
+ * @returns: the targets of the package `dir` configured by `cfg`, by name
+ */
+pub fn targets(dir: Path, cfg: &Config)-> [Target] {
+    let mut res: [Target] = [];
+    if let Ok(d: &Dict) = cfg["targets"]? {
+        for name in d.sortedKeys() {
+            if let Ok(t) = cfg.at("targets", name) {
+                let rootName = t.str("package-root") ?? "";
+                let root = dir.push(t.str("source-dir") ?? "src").push((if (rootName == "") { name } else { rootName }) ~ ".yr");
+                let tests = if (t.boolean("tests") ?? true) {
+                    dir.push(t.str("test-dir") ?? "test").push((t.str("test-root") ?? "__test__") ~ ".yr")
+                } else { Path() };
+
+                res ~= [Target(name, root, tests, (t.str("type") ?? "") == "library", strings(t.elements("flags")), dependencies-> strings(t.elements("dependencies")), links-> strings(t.elements("targets")))];
+            }
+        }
+    }
+
+    if (res.len != 0us) return res;
+
+    let tests = if (cfg.boolean("tests") ?? true) { testRoot(dir, cfg) } else { Path() };
+    copy [Target(cfg.str("name") ?? "", Unit::sourceRoot(dir, cfg), tests, (cfg.str("type") ?? "") == "library", strings(cfg.elements("flags")), all-> true)]
 }
 
 /**
@@ -55,24 +172,19 @@ fn testRoot(dir: Path, cfg: &Config)-> Path {
 }
 
 /**
- * @returns: the root files of the dependencies of the package configured by
- * `cfg`, and of theirs, found in the `.deps` of `top` or of their dependent `dir`
+ * @returns: the root files `t`, a target of the package `dir` configured by
+ * `cfg` among `ts`, compiles against: the ones of the dependencies it selects,
+ * found in the `.deps` of `top` or of `dir`, and of the targets it links with
+ * their own, the packages `seen` and the targets `chain` excepted
  */
-pub fn dependencies(top: Path, dir: Path, cfg: &Config, seen: [[c8]])-> [Path] {
-    let mut res: [Path] = [];
-    let mut visited = seen;
-    if let Ok(d: &Dict) = cfg["dependencies"]? {
-        for name in d.sortedKeys() {
-            if (name in visited) continue;
-            visited = visited ~ [name];
-
-            let mut depDir = top.push(DEPS_DIR).push(name);
-            if (!sys::isDir(depDir)) depDir = dir.push(DEPS_DIR).push(name);
-
-            if let Ok(depCfg) = Unit::config(depDir) {
-                let root = Unit::sourceRoot(depDir, depCfg);
-                if (sys::isFile(root)) res = res ~ [root];
-                res = res ~ dependencies(top, depDir, depCfg, visited);
+fn linked(top: Path, dir: Path, cfg: &Config, ts: [Target], t: Target, seen: [[c8]], chain: [[c8]])-> [Path] {
+    let mut res = dependencies(top, dir, cfg, t, seen);
+    for name in t.links {
+        if (name in chain) continue;
+        for l in ts {
+            if (l.name == name) {
+                res = res ~ linked(top, dir, cfg, ts, l, seen, chain ~ [name]);
+                if (sys::isFile(l.root)) res = res ~ [l.root];
             }
         }
     }
@@ -81,14 +193,117 @@ pub fn dependencies(top: Path, dir: Path, cfg: &Config, seen: [[c8]])-> [Path] {
 }
 
 /**
- * @returns: the versions the `-fversion=` flags of `cfg` activate
+ * @returns: the root files of the library targets of the dependencies `t`
+ * selects in the package `dir` configured by `cfg`, and of theirs, found in the
+ * `.deps` of `top` or of their dependent `dir`, the packages `seen` excepted
  */
-pub fn versions(cfg: &Config)-> [[c8]] {
-    let flag = "-fversion=";
+pub fn dependencies(top: Path, dir: Path, cfg: &Config, t: Target, seen: [[c8]])-> [Path] {
+    let mut res: [Path] = [];
+    let mut visited = seen;
+    if let Ok(d: &Dict) = cfg["dependencies"]? {
+        for name in d.sortedKeys() {
+            if (name in visited || !t.selects(name)) continue;
+            visited = visited ~ [name];
+
+            let mut depDir = top.push(DEPS_DIR).push(name);
+            if (!sys::isDir(depDir)) depDir = dir.push(DEPS_DIR).push(name);
+
+            if let Ok(depCfg) = Unit::config(depDir) {
+                let selected = strings(cfg.elements("dependencies", name, "targets"));
+                let depTargets = targets(depDir, depCfg);
+                for s in depTargets {
+                    if (s.library && (selected.len == 0us || s.name in selected)) {
+                        res = res ~ linked(top, depDir, depCfg, depTargets, s, visited, copy [s.name]);
+                        if (sys::isFile(s.root)) res = res ~ [s.root];
+                    }
+                }
+            }
+        }
+    }
+
+    res
+}
+
+/**
+ * @returns: the options of gyc `fs` sets, its paths from the directory `dir`
+ */
+pub fn flags(dir: Path, fs: [[c8]])-> Flags {
+    let mut includes: [Path] = [];
+    let mut versions: [[c8]] = [];
+    let mut prefix = Path();
+    let mut standalone = false;
+    let mut pending = "";
+    for f in fs {
+        if (pending == "-I") {
+            includes = includes ~ [resolve(dir, f)];
+        } else if (pending == "-iprefix") {
+            prefix = resolve(dir, f);
+        } else if (f == "-nostdinc") {
+            standalone = true;
+        } else if let Ok(v) = joined(f, "-fversion=") {
+            versions = versions ~ [v];
+        } else if let Ok(p) = joined(f, "-iprefix") {
+            prefix = resolve(dir, p);
+        } else if let Ok(p) = joined(f, "-I") {
+            includes = includes ~ [resolve(dir, p)];
+        }
+
+        pending = if (pending == "" && (f == "-I" || f == "-iprefix")) { f } else { "" };
+    }
+
+    Flags(includes, versions, prefix, standalone)
+}
+
+/**
+ * @returns: the argument joined to the option `opt` in the flag `f`, none if
+ * `f` is not `opt` followed by an argument
+ */
+fn joined(f: [c8], opt: [c8])-> ([c8])? {
+    if (f.len > opt.len && f[0us .. opt.len] == opt) return f[opt.len .. $]?;
+    none
+}
+
+/**
+ * @returns: the path `p` from the directory `dir`, without its `.` and `..`
+ */
+fn resolve(dir: Path, p: [c8])-> Path {
+    let path = Path(p);
+    let mut res = if (path.isAbsolute()) { Path("/") } else { dir };
+    for part in path.parts() {
+        if (part == "..") {
+            res = res.parent();
+        } else if (part != "" && part != ".") {
+            res = res.push(part);
+        }
+    }
+
+    res
+}
+
+/**
+ * @returns: the strings of `cs`
+ */
+fn strings(cs: [&Config])-> [[c8]] {
     let mut res: [[c8]] = [];
-    for f in cfg.elements("flags") {
-        if let Str(value-> v) = f {
-            if (v.len > flag.len && v[0us .. flag.len] == flag) res = res ~ [v[flag.len .. $]];
+    for c in cs {
+        if let Str(value-> v) = c {
+            res = res ~ [v];
+        }
+    }
+
+    res
+}
+
+/**
+ * @returns: `ps`, keeping the first occurrence of each
+ */
+fn unique(ps: [Path])-> [Path] {
+    let mut seen: [[c8]] = [];
+    let mut res: [Path] = [];
+    for p in ps {
+        if (p.toStr() !in seen) {
+            seen = seen ~ [p.toStr()];
+            res = res ~ [p];
         }
     }
 

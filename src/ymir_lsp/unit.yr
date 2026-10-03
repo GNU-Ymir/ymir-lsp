@@ -24,7 +24,7 @@ pub record Unit {
     // extension; empty when the file is compiled alone, as its own root
     pub let module: Path;
 
-    // The root files of the packages it imports
+    // The root files of the packages it imports, and the directories of its `-I`
     pub let includes: [Path];
 
     // The versions its package activates
@@ -34,12 +34,16 @@ pub record Unit {
     // the one of the compiler
     pub let prefix: Path;
 
-    pub self (root: Path, module: Path = Path(), includes: [Path] = [], versions: [[c8]] = [], prefix: Path = Path())
+    // Whether its package provides the core library, as `-nostdinc`
+    pub let standalone: bool;
+
+    pub self (root: Path, module: Path = Path(), includes: [Path] = [], versions: [[c8]] = [], prefix: Path = Path(), standalone: bool = false)
         with root = root
         , module = module
         , includes = includes
         , versions = versions
         , prefix = prefix
+        , standalone = standalone
     {}
 
     /**
@@ -52,13 +56,13 @@ pub record Unit {
     /**
      * @returns: whether the compilation can read the absolute path `file`: it
      * is in the directory of its root, of the root of a package it imports,
-     * or of its std
+     * in a directory it includes, or in its std
      */
     pub fn sees(self, file: Path)-> bool {
         if (self.root.parent().isPrefix(file)) return true;
         if (!self.prefix.isEmpty() && self.prefix.parent().isPrefix(file)) return true;
         for i in self.includes {
-            if (i.parent().isPrefix(file)) return true;
+            if ((if (sys::isFile(i)) { i.parent() } else { i }).isPrefix(file)) return true;
         }
 
         false
@@ -71,9 +75,9 @@ pub record Unit {
 pub mod Unit {
 
     /**
-     * @returns: the compilation of the absolute path `file`: the module of the
-     * package of the closest `gyllir.toml` it is in the source or the test
-     * directory of, the file alone otherwise
+     * @returns: the compilation of the absolute path `file`: the module of a
+     * target of the package of the closest `gyllir.toml` it is in the source or
+     * the test directory of, the file alone otherwise
      */
     pub fn compiling(file: Path)-> Unit {
         let mut dir = file.parent();
@@ -90,8 +94,8 @@ pub mod Unit {
     }
 
     /**
-     * @returns: the compilations of the whole package `dir`, of its sources
-     * and of its tests, none if it is not one
+     * @returns: the compilations of the whole package `dir`, of the sources
+     * and of the tests of its targets, none if it is not one
      */
     pub fn ofPackage(dir: Path)-> [Unit] {
         if let Ok(cfg) = Unit::config(dir) return utils::wholePackage(dir, cfg);
