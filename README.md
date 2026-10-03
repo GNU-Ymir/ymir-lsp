@@ -23,11 +23,14 @@ ymir-lsp --socket=PORT    # connects to the client listening on PORT
 ```
 
 `--host=HOST` sets the address of the last two, `127.0.0.1` by default. A file is checked as
-gyllir builds it: in the package of the closest `gyllir.toml`, a file of its source directory is
-the module of the root file of the package it is (`main.yr`, `__lib__.yr`, or `package-root`), and
-a file of `test/` a module of `test/__test__.yr`, with the packages of `.deps/` it depends on, the
-std its `[std]` resolved there if not the one of gyc, the `-fversion=` of its `flags`, and the
-`__test` blocks. Any other file is checked alone. A document
+gyllir builds it: in the package of the closest `gyllir.toml`, a file of the source directory of
+a target is a module of its root file (`main.yr`, `__lib__.yr`, or `package-root`), and a file of
+its test directory a module of its `test-root`, `__test__.yr` by default, a package declaring no
+`[targets.<name>]` being a single target of its top-level fields. It is compiled against the
+library targets of the packages of `.deps/` the target selects, and the targets of its package it
+links, with the std its `[std]` resolved there if not the one of gyc, the `-I`, `-iprefix`,
+`-nostdinc` and `-fversion=` of the `flags` of the target, and the `__test` blocks. Any other file
+is checked alone. A document
 is checked once the client stopped changing it for 250ms, the unsaved buffers of the client
 standing in for their files, and its warnings are reported as such, as with `gyllir build`. A
 save checks again the open documents reading a document changed since their latest check.
