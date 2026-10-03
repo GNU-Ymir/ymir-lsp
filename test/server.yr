@@ -165,3 +165,61 @@ __test a_session_finds_the_declarations_of_the_packages_of_the_workspace {
     let after = names(response(msgs, 7i64).elements("result"));
     assert("Cube" in after && "Square" !in after && "Color" !in after && "main" in after);
 }
+
+/**
+ * @returns: `text` rewritten by the `TextEdit`s of the protocol `edits`, its
+ * characters being bytes
+ */
+fn applied(text: [c8], edits: [&Config])-> [c8] {
+    let mut starts: [usize] = copy [0us];
+    for i in 0us .. text.len if text[i] == '\n' {
+        starts ~= [i + 1us];
+    }
+
+    let mut res = "";
+    let mut from = 0us;
+    for e in edits {
+        let s = starts[cast!usize(e.int("range", "start", "line") ?? 0i64)] + cast!usize(e.int("range", "start", "character") ?? 0i64);
+        let t = starts[cast!usize(e.int("range", "end", "line") ?? 0i64)] + cast!usize(e.int("range", "end", "character") ?? 0i64);
+        res = res ~ text[from .. s] ~ (e.str("newText") ?? "");
+        from = t;
+    }
+
+    res ~ text[from .. $]
+}
+
+__test a_session_formats_a_document_and_the_declarations_of_a_range {
+    let uri = Document::ofPath(env::currentDir().push("test_resources/server/fmt.yr").toStr());
+    let text = "in fmt;\n\nfn  first() {\n  foo();\n}\n\nfn  second() {\n  bar();\n}\n";
+    let broken = "in fmt;\n\nfn first( {\n";
+    let doc = "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(uri)) ~ "}";
+    let options = ",\"options\":{\"tabSize\":4,\"insertSpaces\":true}";
+    let range = ",\"range\":{\"start\":{\"line\":7,\"character\":2},\"end\":{\"line\":7,\"character\":5}}";
+
+    let input = request(1i64, "initialize", "{\"capabilities\":{}}")
+        ~ notification("initialized", "{}")
+        ~ notification("textDocument/didOpen", "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(uri)) ~ ",\"languageId\":\"ymir\",\"version\":1,\"text\":" ~ std::config::json::dump(copy Str(text)) ~ "}}")
+        ~ request(2i64, "textDocument/formatting", doc ~ options ~ "}")
+        ~ request(3i64, "textDocument/rangeFormatting", doc ~ range ~ options ~ "}")
+        ~ notification("textDocument/didChange", "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(uri)) ~ ",\"version\":2},\"contentChanges\":[{\"text\":" ~ std::config::json::dump(copy Str(broken)) ~ "}]}")
+        ~ request(4i64, "textDocument/formatting", doc ~ options ~ "}")
+        ~ request(5i64, "shutdown", "null")
+        ~ notification("exit", "null");
+
+    let (msgs, code) = session(input);
+    assert(code == 0);
+
+    let caps = response(msgs, 1i64).at("result", "capabilities");
+    assert(caps.boolean("documentFormattingProvider") ?? false);
+    assert(caps.boolean("documentRangeFormattingProvider") ?? false);
+
+    let whole = "in fmt;\n\nfn first() {\n    foo();\n}\n\nfn second() {\n    bar();\n}\n";
+    assert(applied(text, response(msgs, 2i64).elements("result")) == whole);
+
+    // the range is in the second function, the first one is left as it is
+    let part = "in fmt;\n\nfn  first() {\n  foo();\n}\n\nfn second() {\n    bar();\n}\n";
+    assert(applied(text, response(msgs, 3i64).elements("result")) == part);
+
+    // a document that does not parse has no canonical form
+    assert(response(msgs, 4i64).int("error", "code") ?? 0i64 == -32803i64);
+}
