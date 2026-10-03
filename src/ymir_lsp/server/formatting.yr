@@ -40,6 +40,17 @@ pub record Lines {
      * @returns: the position of the offset `offset`
      */
     pub fn positionOf(self, offset: usize)-> &Config {
+        let p = self.at(offset);
+        let dmut res = copy Dict();
+        res["line"] = copy Int(cast!i64(p.line));
+        res["character"] = copy Int(cast!i64(p.character));
+        res
+    }
+
+    /**
+     * @returns: the position of the offset `offset`
+     */
+    pub fn at(self, offset: usize)-> lsp::Position {
         let mut lo = 0us;
         let mut hi = self._starts.len;
         while (lo + 1us < hi) {
@@ -48,10 +59,7 @@ pub record Lines {
             else hi = mid;
         }
 
-        let dmut res = copy Dict();
-        res["line"] = copy Int(cast!i64(lo));
-        res["character"] = copy Int(cast!i64(units(self._text[self._starts[lo] .. offset], self._encoding)));
-        res
+        lsp::Position(cast!u64(lo), units(self._text[self._starts[lo] .. offset], self._encoding))
     }
 
     /**

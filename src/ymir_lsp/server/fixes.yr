@@ -1,0 +1,172 @@
+/**
+ * The quick fixes the server proposes beside the ones of ymirc: the `use` of
+ * a module declaring an undefined symbol, the removal of an unused one, and
+ * the `mut` or `dmut` of a local variable written to.
+ */
+in fixes;
+
+use ymir_lsp::format::source;
+use ymir_lsp::server::formatting;
+
+use ymirc::errors::lsp;
+use ymirc::semantic::{declarator, index, validator};
+use ymirc::semantic::generator::value::variable;
+
+use std::fs::path;
+
+/**
+ * @params:
+ *   - d: a diagnostic of the compilation of `text`, the source of the file `path`
+ *   - symbols: the declarations the modules to use are searched in, the ones of
+ *     the files of `project` first
+ * @returns: `d`, the quick fixes of the server before the ones of ymirc
+ */
+pub fn withFixes(d: LspDiagnostic, path: [c8], text: [c8], idx: &SemanticIndex, symbols: &SymbolTable, project: [Path], encoding: PositionEncoding)-> LspDiagnostic {
+    let undefined = d.code == DeclareErrorMessage::UNDEF_VAR.code;
+    if (d.loc.file != path) return d;
+    if (!undefined && d.code != DeclareErrorMessage::UNUSED_USE.code && d.code != ValidateErrorMessage::IMMUTABLE_LVALUE.code) return d;
+
+    let lines = Lines(text, encoding);
+    let start = lines.offsetOf(d.loc.start.line, d.loc.start.character);
+    let end = lines.offsetOf(d.loc.end.line, d.loc.end.character);
+    let fixes = if (undefined) {
+        importing(path, text, if (start <= end && end <= text.len) { text[start .. end] } else { "" }, symbols, project, lines)
+    } else if (d.code == DeclareErrorMessage::UNUSED_USE.code) {
+        unused(path, text, start, lines)
+    } else if (d.code == ValidateErrorMessage::IMMUTABLE_LVALUE.code) {
+        mutable(path, text, start, idx, lines)
+    } else { [] };
+
+    if (fixes.len == 0us) return d;
+    LspDiagnostic(d.loc, d.severity, d.code, d.msg, d.related, fixes ~ d.fixes)
+}
+
+/**
+ * @returns: the `use` of each module declaring the public symbol `name`
+ */
+fn importing(path: [c8], text: [c8], name: [c8], symbols: &SymbolTable, project: [Path], lines: Lines)-> [QuickFix] {
+    if (!isIdentifier(name)) return [];
+
+    let mut res: [QuickFix] = [];
+    for m in symbols.exporting(name, project, except-> path) {
+        if let Ok(edits) = format::imports(path, text, add-> copy [segments(m)], remove-> []) && edits.len != 0us {
+            res ~= [QuickFix("use " ~ m, edited(path, edits, lines))];
+        }
+    }
+
+    res
+}
+
+/**
+ * @returns: the removal of the `use` whose path ends at the offset `at`
+ */
+fn unused(path: [c8], text: [c8], at: usize, lines: Lines)-> [QuickFix] {
+    if let Ok(p) = format::importAt(path, text, at) {
+        if let Ok(edits) = format::imports(path, text, add-> [], remove-> copy [p]) && edits.len != 0us {
+            return copy [QuickFix("Remove the use of " ~ joined(p), edited(path, edits, lines))];
+        }
+    }
+
+    []
+}
+
+/**
+ * @returns: the `mut` of the local variable written to by the left operand
+ * starting at the offset `at`, its `dmut` if a part of it is written to
+ */
+fn mutable(path: [c8], text: [c8], at: usize, idx: &SemanticIndex, lines: Lines)-> [QuickFix] {
+    let src = { Source::read(path, text) } catch { _: &ErrorMsg => return []; };
+
+    let t = if let Ok(i) = tokenAt(src, at) { i } else { return []; };
+    let root = chainRoot(src, t);
+    let w = src.words[root];
+    if let Ok(occ) = idx.at(path, w.line, w.col) {
+        if let v: &VarDeclValue = occ.decl && (!v.isReference && !v.isLazy && !v.isIterator) {
+            let n = if let Ok(i) = src.find(v.loc) { i } else { return []; };
+            let name = src.at(n);
+            if (root == t) {
+                if (v.isMutable) return [];
+                return copy [QuickFix("Declare " ~ name ~ " mut", edited(path, copy [format::TextEdit(src.starts[n], src.starts[n], "mut ")], lines))];
+            }
+
+            if (n > 0us && src.isTok(n - 1us, "dmut")) return [];
+            let edit = if (n > 0us && src.isTok(n - 1us, "mut")) {
+                format::TextEdit(src.starts[n - 1us], src.ends[n - 1us], "dmut")
+            } else {
+                format::TextEdit(src.starts[n], src.starts[n], "dmut ")
+            };
+
+            return copy [QuickFix("Declare " ~ name ~ " dmut", edited(path, copy [edit], lines))];
+        }
+    }
+
+    []
+}
+
+/**
+ * @returns: the first token of the chain of indexes, calls and field accesses
+ * the token `t` is a part of
+ */
+fn chainRoot(src: &Source, t: usize)-> usize {
+    let mut i = t;
+    loop {
+        if (src.isTok(i, "[") || src.isTok(i, "(")) {
+            if (i == 0us) break;
+            i -= 1us;
+            if (src.isTok(i, "]") || src.isTok(i, ")")) i = src.partners[i];
+        } else if (i >= 2us && (src.isTok(i - 1us, ".") || src.isTok(i - 1us, ":."))) {
+            i -= 2us;
+            if (src.isTok(i, "]") || src.isTok(i, ")")) i = src.partners[i];
+        } else break;
+    }
+
+    i
+}
+
+/**
+ * @returns: the token starting at the offset `at`
+ */
+fn tokenAt(src: &Source, at: usize)-> (usize)? {
+    for i in 0us .. src.len if src.starts[i] == at {
+        return i?;
+    }
+
+    none
+}
+
+fn edited(path: [c8], edits: [format::TextEdit], lines: Lines)-> [lsp::TextEdit] {
+    copy [lsp::TextEdit(lsp::Location(path, lines.at(e.start), lines.at(e.end)), e.text) for e in edits]
+}
+
+fn segments(module: [c8])-> [[c8]] {
+    let mut res: [[c8]] = [];
+    let mut from = 0us;
+    let mut i = 0us;
+    while (i + 1us < module.len) {
+        if (module[i] == ':' && module[i + 1us] == ':') {
+            res ~= [module[from .. i]];
+            from = i + 2us;
+            i += 2us;
+        } else i += 1us;
+    }
+
+    res ~ [module[from .. $]]
+}
+
+fn joined(segments: [[c8]])-> [c8] {
+    let mut res = "";
+    for s in segments {
+        res = if (res.len == 0us) { s } else { res ~ "::" ~ s };
+    }
+
+    res
+}
+
+fn isIdentifier(name: [c8])-> bool {
+    if (name.len == 0us) return false;
+    for c in name if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+        return false;
+    }
+
+    true
+}

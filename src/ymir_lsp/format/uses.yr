@@ -5,6 +5,7 @@
  */
 in uses;
 
+use ymirc::lexing::word;
 use ymirc::syntax::declaration::module;
 use ymirc::syntax::expression::{literal, operator};
 
@@ -36,6 +37,17 @@ pub fn segments(u: &UseDecl)-> ([[c8]])? {
     }
 
     res?
+}
+
+/**
+ * @returns: the token naming the last segment of the path imported by `u`
+ */
+pub fn lastSegment(u: &UseDecl)-> &Word {
+    if let p: &PathExpr = u.path {
+        return p.right.loc;
+    }
+
+    u.path.loc
 }
 
 /**

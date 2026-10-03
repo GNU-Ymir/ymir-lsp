@@ -9,6 +9,7 @@ in server;
 mod ::code;
 mod ::compiled;
 mod ::error;
+mod ::fixes;
 mod ::formatting;
 mod ::hover;
 mod ::symbols;
@@ -613,7 +614,8 @@ pub class Server {
         let diags = Flattening::diagnosticsOf(p.getWarnings() ~ thrown, encoding-> self._encoding);
         let dmut published = copy Array();
         for d in diags {
-            published:.push(self.inDocument(d, doc.path));
+            let fixed = fixes::withFixes(d, doc.path, doc.text, p.getIndex(), self._symbols, self._folders, self._encoding);
+            published:.push(self.inDocument(fixed, doc.path));
         }
 
         session:.exit();

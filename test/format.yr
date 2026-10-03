@@ -68,3 +68,41 @@ __test a_source_that_does_not_parse_has_no_canonical_form {
 
     assert(msg == "the file does not parse");
 }
+
+__test the_use_declarations_are_rewritten_importing_and_no_longer_importing_paths {
+    let src = "in u;\n\nuse std::io;\nuse std::{conv, fs::path};\n\nfn main () {}\n";
+    let add = format::imports("u.yr", src, add-> copy [copy ["shapes"]], remove-> []) ?? [];
+    assert(applied(src, add) == "in u;\n\nuse shapes;\n\nuse std::{conv, io};\nuse std::fs::path;\n\nfn main () {}\n");
+
+    let removed = format::imports("u.yr", src, add-> [], remove-> copy [copy ["std", "conv"]]) ?? [];
+    assert(applied(src, removed) == "in u;\n\nuse std::io;\nuse std::fs::path;\n\nfn main () {}\n");
+
+    // a path imported already is not added again, and the last one removed takes its line with it
+    assert((format::imports("u.yr", src, add-> copy [copy ["std", "io"]], remove-> []) ?? copy [TextEdit(0us, 0us, "")]).len == 0us);
+    let only = "in u;\n\nuse std::conv;\n\n/** doc */\nfn main () {}\n";
+    assert(applied(only, format::imports("u.yr", only, add-> [], remove-> copy [copy ["std", "conv"]]) ?? []) == "in u;\n\n/** doc */\nfn main () {}\n");
+}
+
+__test a_use_is_added_after_the_module_name_when_there_is_none {
+    let named = "in u;\n\nfn main () {}\n";
+    assert(applied(named, format::imports("u.yr", named, add-> copy [copy ["std", "io"]], remove-> []) ?? []) == "in u;\n\nuse std::io;\n\nfn main () {}\n");
+
+    let unnamed = "fn main () {}\n";
+    assert(applied(unnamed, format::imports("u.yr", unnamed, add-> copy [copy ["std", "io"]], remove-> []) ?? []) == "use std::io;\n\nfn main () {}\n");
+}
+
+__test the_use_declarations_holding_a_comment_are_not_rewritten {
+    let src = "in u;\n\nuse std::io; // printing\nuse std::conv;\n\nfn main () {}\n";
+    if let Ok(_) = format::imports("u.yr", src, add-> [], remove-> copy [copy ["std", "conv"]]) {
+        assert(false, "a comment would be lost");
+    }
+}
+
+__test the_path_of_a_use_is_found_by_its_last_segment {
+    let src = "in u;\n\nuse std::{conv, fs::path};\n";
+    assert(format::importAt("u.yr", src, 27us) ?? [] == ["std", "fs", "path"]);
+    assert(format::importAt("u.yr", src, 17us) ?? [] == ["std", "conv"]);
+    if let Ok(_) = format::importAt("u.yr", src, 18us) {
+        assert(false, "no path ends with a token starting there");
+    }
+}

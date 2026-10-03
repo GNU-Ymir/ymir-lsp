@@ -297,3 +297,74 @@ __test a_session_formats_a_document_and_the_declarations_of_a_range {
     // a document that does not parse has no canonical form
     assert(response(msgs, 4i64).int("error", "code") ?? 0i64 == -32803i64);
 }
+
+/**
+ * @returns: the diagnostics last published for the document `uri`
+ */
+fn latest(msgs: [&Config], uri: [c8])-> [&Config] {
+    let mut res: [&Config] = [];
+    for m in msgs if m.str("method") ?? "" == "textDocument/publishDiagnostics" && m.str("params", "uri") ?? "" == uri {
+        res = m.elements("params", "diagnostics");
+    }
+
+    res
+}
+
+/**
+ * @returns: the opening of the document `uri`, and a request checking it
+ */
+fn opened(uri: [c8], text: [c8], id: i64)-> [c8] {
+    let doc = "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(uri)) ~ "}}";
+    notification("textDocument/didOpen", "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(uri)) ~ ",\"languageId\":\"ymir\",\"version\":1,\"text\":" ~ std::config::json::dump(copy Str(text)) ~ "}}")
+        ~ request(id, "textDocument/documentSymbol", doc)
+}
+
+__test the_diagnostics_carry_the_quick_fixes_of_the_server {
+    let dir = env::currentDir().push("test_resources/server");
+    let docs = copy [
+        (Document::ofPath(dir.push("mutable.yr").toStr()), "in mutable;\n\nuse std::io;\n\nfn main () {\n    let x = 1;\n    x = 2;\n    let a = copy [1, 2];\n    a [0] = 3;\n    println (x, a);\n}\n"),
+        (Document::ofPath(dir.push("unused.yr").toStr()), "in unused;\n\nuse std::conv;\nuse std::io;\n\nfn main () {\n    println (1);\n}\n"),
+        (Document::ofPath(dir.push("pkg/src/main.yr").toStr()), "mod .shapes;\n\nuse std::io;\n\nfn main () {\n    let s = scale (Square (2), 3);\n    println (s.side);\n}\n")
+    ];
+
+    let mut input = request(1i64, "initialize", "{\"capabilities\":{}}") ~ notification("initialized", "{}");
+    for i in 0us .. docs.len {
+        input = input ~ opened(docs[i]._0, docs[i]._1, 10i64 + cast!i64(i));
+    }
+
+    let (msgs, code) = session(input ~ request(2i64, "shutdown", "null") ~ notification("exit", "null"));
+    assert(code == 0);
+
+    let titles: [[[c8]]] = copy [
+        copy ["Declare x mut", "Declare a dmut"],
+        copy ["Remove the use of std::conv"],
+        copy ["use shapes"]
+    ];
+
+    let mut fixed: [[c8]] = [];
+    for i in 0us .. docs.len {
+        let (uri, text) = docs[i];
+        let diags = latest(msgs, uri);
+        assert(diags.len == titles[i].len, uri);
+
+        let mut edits: [&Config] = [];
+        for j in 0us .. diags.len {
+            let fixes = diags[j].elements("data", "fixes");
+            assert(fixes.len != 0us && fixes[0].str("title") ?? "" == titles[i][j], uri);
+            edits ~= fixes[0].elements("edit", "changes", uri);
+        }
+
+        fixed ~= [applied(text, edits)];
+    }
+
+    // once fixed, the documents compile without a diagnostic
+    let mut again = request(1i64, "initialize", "{\"capabilities\":{}}") ~ notification("initialized", "{}");
+    for i in 0us .. docs.len {
+        again = again ~ opened(docs[i]._0, fixed[i], 10i64 + cast!i64(i));
+    }
+
+    let (after, _) = session(again ~ request(2i64, "shutdown", "null") ~ notification("exit", "null"));
+    for d in docs {
+        assert(published(after, d._0) != 0us && latest(after, d._0).len == 0us, d._0);
+    }
+}
