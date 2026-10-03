@@ -544,12 +544,16 @@ pub class Server {
      * change, none if it is not a file, or if its compilation was cancelled
      */
     fn compiled(mut self, uri: [c8])-> (Compiled)? {
-        if let Ok(c) = self._compiled[uri] {
-            if (c.generation == self._generation) return c?;
+        let doc = if let Ok(d) = self._docs[uri] { d } else { return none; };
+        if let Ok(c) = self._compiled[uri] && (c.generation == self._generation) {
+            self._dirty:.remove(uri);
+            return c?;
         }
 
-        let doc = if let Ok(d) = self._docs[uri] { d } else { return none; };
-        if (doc.path == "") return none;
+        if (doc.path == "") {
+            self._dirty:.remove(uri);
+            return none;
+        }
 
         let unit = Unit::compiling(Path(doc.path));
         let (p, thrown) = if let Ok(r) = self:.compile(unit, index-> true) { r } else { return none; };
