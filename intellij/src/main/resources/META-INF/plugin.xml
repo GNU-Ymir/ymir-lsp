@@ -5,8 +5,8 @@
 
     <description><![CDATA[
     Support of the <a href="https://github.com/GNU-Ymir">Ymir</a> language: highlighting of the
-    <code>.yr</code> files, and the diagnostics, hover, navigation, outline and completion of the
-    <code>ymir-lsp</code> language server.
+    <code>.yr</code> files, and the diagnostics, hover, navigation, outline, completion and
+    workspace symbols of the <code>ymir-lsp</code> language server.
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
@@ -28,6 +28,8 @@
                                         implementationClass="org.gnu.ymir.intellij.run.YmirRunLineMarkerProvider"/>
 
         <directoryIndexExcludePolicy implementation="org.gnu.ymir.intellij.project.GyllirExcludePolicy"/>
+        <gotoClassContributor implementation="org.gnu.ymir.intellij.symbol.YmirGotoClassContributor"/>
+        <gotoSymbolContributor implementation="org.gnu.ymir.intellij.symbol.YmirGotoSymbolContributor"/>
     </extensions>
 
     <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
