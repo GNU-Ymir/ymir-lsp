@@ -27,7 +27,8 @@ pub enum Sep : u8
 | SPACE = 2u8
 | PAD   = 3u8 // `_pad` spaces
 | LINE  = 4u8
-| HARD  = 5u8;
+| HARD  = 5u8
+| SOFT  = 6u8; // nothing, or a line break
 
 /**
  * How the instructions of a block are separated
@@ -900,6 +901,12 @@ pub class Printer {
      * they overflow
      */
     fn expr(mut self, e: &Expression, value: bool = false) {
+        let (links, ops, root) = self.links(e);
+        if (ops.len >= 2us) {
+            self:.chain(links, ops, root);
+            return;
+        }
+
         match e {
             b: &BlockExpr => self:.block(b);
             c: &ConditionalExpr => self:.ifChain(c);
@@ -925,18 +932,11 @@ pub class Printer {
             b: &BinaryExpr => self:.binary(b, value);
             m: &MultOperatorExpr => {
                 self:.expr(m.left);
-                if (!m.end.isEof) self:.list(self.index(m.loc), m.rights, value-> m.loc.str == "(");
+                self:.args(m);
             }
             t: &TemplateCallExpr => {
                 self:.expr(t.left);
-                let bang = self.index(t.loc);
-                if (self._src.isTok(bang + 1us, "{")) {
-                    self:.list(bang + 1us, t.rights);
-                } else {
-                    for r in t.rights {
-                        self:.expr(r);
-                    }
-                }
+                self:.templateArgs(t);
             }
             n: &NamedExpr => self:.expr(n.value, value-> true);
             l: &ListExpr => {
@@ -1271,6 +1271,96 @@ pub class Printer {
     }
 
     /**
+     * Write the arguments of the call or the index `m`
+     */
+    fn args(mut self, m: &MultOperatorExpr) {
+        if (!m.end.isEof) self:.list(self.index(m.loc), m.rights, value-> m.loc.str == "(");
+    }
+
+    /**
+     * Write the template arguments of `t`
+     */
+    fn templateArgs(mut self, t: &TemplateCallExpr) {
+        let bang = self.index(t.loc);
+        if (self._src.isTok(bang + 1us, "{")) {
+            self:.list(bang + 1us, t.rights);
+        } else {
+            for r in t.rights {
+                self:.expr(r);
+            }
+        }
+    }
+
+    /**
+     * @returns: the links of the chain of calls and accesses `e` ends with, from
+     * the last to the first, the operators `.` and `:.` of its calls, and its
+     * first operand
+     */
+    fn links(self, e: &Expression)-> ([&Expression], [usize], &Expression) {
+        let mut links: [&Expression] = [];
+        let mut ops: [usize] = [];
+        let mut called = false;
+        let mut cur = e;
+        loop {
+            let mut next = cur;
+            let mut at = 0us;
+            if let m: &MultOperatorExpr = cur {
+                if (m.loc.str == "(") called = true;
+                next = m.left;
+                at = self.index(m.loc);
+            } else if let t: &TemplateCallExpr = cur && isMember(t.left) {
+                called = true;
+                next = t.left;
+                at = self.index(t.loc);
+            } else if let b: &BinaryExpr = cur && isMember(b) {
+                at = self.index(b.loc);
+                if (called) ops ~= [at];
+                called = false;
+                next = b.left;
+            } else {
+                break;
+            }
+
+            links ~= [cur];
+            cur = next;
+            if (self.isParenthesized(at, next)) break;
+        }
+
+        (links, ops, cur)
+    }
+
+    /**
+     * Write the chain of the links `links` from its first operand `root`: on a
+     * line if it fits, broken before each of the operators `ops` otherwise,
+     * indented once
+     */
+    fn chain(mut self, links: [&Expression], ops: [usize], root: &Expression) {
+        self:.open(DocKind::GROUP, self.start(root));
+        self:.expr(root);
+        self._b:.open(DocKind::INDENT, n-> INDENT);
+        let mut k = ops.len;
+        for j in 0us .. links.len {
+            match links[links.len - 1us - j] {
+                b: &BinaryExpr => {
+                    let o = self.index(b.loc);
+                    if (k != 0us && ops[k - 1us] == o) {
+                        self:.sepAt(Sep::SOFT, o);
+                        k -= 1us;
+                    }
+
+                    self:.expr(b.right);
+                }
+                m: &MultOperatorExpr => self:.args(m);
+                t: &TemplateCallExpr => self:.templateArgs(t);
+            }
+        }
+
+        self:.flushTo(self.last(links[0us]) + 1us);
+        self._b:.close();
+        self:.close();
+    }
+
+    /**
      * Write the operand `e` of a chain, a string literal split when `value`
      * being aligned on the chain
      */
@@ -1295,7 +1385,7 @@ pub class Printer {
      * @returns: whether the left operand `l` of the operator `op` is written
      * between parentheses
      */
-    fn isParenthesized(self, op: usize, l: &BinaryExpr)-> bool {
+    fn isParenthesized(self, op: usize, l: &Expression)-> bool {
         op > 0us && self._src.isTok(op - 1us, ")") && self._src.partners[op - 1us] < self.first(l)
     }
 
@@ -1905,6 +1995,7 @@ pub class Printer {
             Sep::PAD   => self._b:.add(Doc::text(spaces(self._pad)));
             Sep::LINE  => self._b:.add(Doc::mk(DocKind::LINE));
             Sep::HARD  => self:.lineBreak(g.breaks);
+            Sep::SOFT  => self._b:.add(Doc::mk(DocKind::SOFT));
         }
 
         self._sep = Sep::NONE;
@@ -1999,6 +2090,14 @@ fn isKnown(w: (usize)?)-> bool {
 
 fn isSome(r: (RedirectCtor)?)-> bool {
     if let Ok(_) = r return true;
+    false
+}
+
+/**
+ * @returns: whether `e` is an access `.` or `:.`
+ */
+fn isMember(e: &Expression)-> bool {
+    if let b: &BinaryExpr = e return b.loc.str == "." || b.loc.str == ":.";
     false
 }
 

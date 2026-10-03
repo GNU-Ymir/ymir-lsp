@@ -41,7 +41,8 @@ the names starting with its first character and holding the others in order.
 
 A document is formatted in its canonical form: its tokens on lines of at most 120 characters,
 indented by 4 spaces, the lists that do not fit broken one element a line, aligned on their
-opening parenthesis, the consecutive `let`, `def`, enum fields and `match` arms aligned on their
+opening parenthesis, the chains of at least two `.` or `:.` calls that do not fit broken before
+each call, indented once, the consecutive `let`, `def`, enum fields and `match` arms aligned on their
 `=` or `=>`, and its top-level `use` declarations merged and sorted, `std` last, as yr-mode's
 `yr-optimize-imports` writes them. A range formats the declarations it is in, and a document
 that does not parse is left as it is.
