@@ -1,13 +1,15 @@
 /**
  * The language server: a thread queues the messages of the client, the main one
  * answers them from the compilation of the open documents, and checks a changed
- * one once no message came for `DEBOUNCE` milliseconds, until the next change.
+ * one once no message came for `DEBOUNCE` milliseconds, until the next change,
+ * the packages of the workspace being compiled then for their declarations.
  */
 in server;
 
 mod ::code;
 mod ::compiled;
 mod ::error;
+mod ::symbols;
 mod ::utils;
 
 use ymir_lsp::{document, transport, unit};
@@ -31,6 +33,7 @@ pub def DEBOUNCE = 250u64;
 pub def Compiled: compiled::Compiled;
 pub def RpcCode: code::RpcCode;
 pub def RpcError: error::RpcError;
+pub def SymbolTable: symbols::SymbolTable;
 
 @final
 pub class Server {
@@ -54,6 +57,16 @@ pub class Server {
 
     // The sessions of the compilations, by `Unit::key`
     let dmut _sessions: [[c8] => &Session] = copy [];
+
+    // The declarations of the modules compiled
+    let dmut _symbols: &SymbolTable = copy SymbolTable();
+
+    // The directories of the workspace folders of the client
+    let mut _folders: [Path] = [];
+
+    // The compilations of the packages of the folders whose declarations are
+    // to be read again, by `Unit::key`
+    let dmut _unindexed: [[c8] => Unit] = copy [];
 
     // The session of the compilation in progress, cancelled by a change
     let dmut _compiling: (&Session)? = none;
@@ -80,7 +93,7 @@ pub class Server {
     pub fn run(mut self)-> i32 {
         self._reader = (spawn self:.readMain())?;
         loop {
-            if (self._dirty.len == 0us) {
+            if (self._dirty.len == 0us && self._unindexed.len == 0us) {
                 self._received:.wait();
             } else if (!self._received:.wait(timeout-> dur::millis(DEBOUNCE))) {
                 self:.checkDirty();
@@ -193,6 +206,7 @@ pub class Server {
             "textDocument/documentSymbol" => self:.documentSymbol(params)
             "textDocument/completion"     => self:.completion(params)
             "textDocument/codeAction"     => self:.codeAction(params)
+            "workspace/symbol"            => self.workspaceSymbol(params)
             _ => throw copy RpcError(RpcCode::METHOD_NOT_FOUND, "unknown method " ~ method);
         }
     }
@@ -224,6 +238,8 @@ pub class Server {
                 for uri, _ in self._docs {
                     self._dirty[uri] = ();
                 }
+
+                self:.reindex();
             }
             "textDocument/didClose" => {
                 if let Ok(uri) = self.uriOf(params) {
@@ -246,6 +262,22 @@ pub class Server {
                 if (v == "utf-8") self._encoding = PositionEncoding::UTF8;
             }
         }
+
+        for f in params.elements("workspaceFolders") {
+            if let Ok(p) = Document::toPath(f.str("uri") ?? "") {
+                self._folders ~= [Path(p)];
+            }
+        }
+
+        if (self._folders.len == 0us) {
+            if let Ok(p) = Document::toPath(params.str("rootUri") ?? "") {
+                self._folders = copy [Path(p)];
+            } else if let Ok(p) = params.str("rootPath") {
+                self._folders = copy [Path(p)];
+            }
+        }
+
+        self:.reindex();
 
         let dmut sync = copy Dict();
         sync["openClose"] = copy Bool(true);
@@ -272,6 +304,7 @@ pub class Server {
         caps["documentSymbolProvider"] = copy Bool(true);
         caps["completionProvider"] = completion;
         caps["codeActionProvider"] = actions;
+        caps["workspaceSymbolProvider"] = copy Bool(true);
 
         let dmut info = copy Dict();
         info["name"] = copy Str("ymir-lsp");
@@ -329,6 +362,14 @@ pub class Server {
     {
         let (doc, c, line, col) = self:.position(params);
         QueryExporting::dump(CompletionQuery::at(c.parser.getIndex(), c.parser.getModuleSymbol(), doc.path, c.text, line, col))
+    }
+
+    /**
+     * @returns: the declarations whose name matches the query, as of the
+     * latest compilations
+     */
+    fn workspaceSymbol(self, params: &Config)-> &Config {
+        symbols::SymbolTable::dump(self._symbols.search(params.str("query") ?? "", self._folders), self._encoding)
     }
 
     /**
@@ -419,12 +460,33 @@ pub class Server {
     }
 
     /**
-     * Publish the diagnostics of the documents changed, until a message comes
+     * Publish the diagnostics of the documents changed, then read the
+     * declarations of the packages of the workspace, until a message comes
      */
     fn checkDirty(mut self) {
         for uri in copy [u for u, _ in self._dirty] {
             if (self._received.get() > 0) return;
             self:.compiled(uri);
+        }
+
+        for key in copy [k for k, _ in self._unindexed] {
+            if (self._received.get() > 0) return;
+            if let Ok(u) = self._unindexed[key] {
+                if let Ok(_) = self:.compile(u, index-> false) {
+                    self._unindexed:.remove(key);
+                }
+            }
+        }
+    }
+
+    /**
+     * Read again the declarations of the packages of the workspace folders
+     */
+    fn reindex(mut self) {
+        for dir in self._folders {
+            for u in Unit::ofPackage(dir) {
+                self._unindexed[u.key()] = u;
+            }
         }
     }
 
@@ -441,6 +503,31 @@ pub class Server {
         if (doc.path == "") return none;
 
         let unit = Unit::compiling(Path(doc.path));
+        let (p, thrown) = if let Ok(r) = self:.compile(unit, index-> true) { r } else { return none; };
+
+        let dmut session = self:.sessionOf(unit);
+        session:.enter();
+        let diags = Flattening::diagnosticsOf(p.getWarnings() ~ thrown, encoding-> self._encoding);
+        let dmut published = copy Array();
+        for d in diags {
+            published:.push(self.inDocument(d, doc.path));
+        }
+
+        session:.exit();
+
+        let c = Compiled(p, doc.text, self._generation);
+        self._compiled[uri] = c;
+        self._dirty:.remove(uri);
+        self:.publish(uri, published);
+        c?
+    }
+
+    /**
+     * @returns: the compilation of `unit`, the open documents standing in for
+     * their files, and the error it threw if any; none if it was cancelled.
+     * The declarations of its modules replace the ones read before
+     */
+    fn compile(mut self, unit: Unit, index: bool)-> (&Parser, [&ErrorMsg])? {
         let dmut session = self:.sessionOf(unit);
 
         let dmut overlay: [Path => [c8]] = copy [];
@@ -448,7 +535,7 @@ pub class Server {
             overlay[Path(d.path)] = copy d.text;
         }
 
-        let dmut p = copy Parser::inSession(alias session, unit.root.toStr(), overlay-> overlay, index-> true);
+        let dmut p = copy Parser::inSession(alias session, unit.root.toStr(), overlay-> overlay, index-> index);
         atomic self {
             self._compiling = (alias session)?;
         }
@@ -470,20 +557,8 @@ pub class Server {
 
         if (cancelled) return none;
 
-        session:.enter();
-        let diags = Flattening::diagnosticsOf(p.getWarnings() ~ thrown, encoding-> self._encoding);
-        let dmut published = copy Array();
-        for d in diags {
-            published:.push(self.inDocument(d, doc.path));
-        }
-
-        session:.exit();
-
-        let c = Compiled(p, doc.text, self._generation);
-        self._compiled[uri] = c;
-        self._dirty:.remove(uri);
-        self:.publish(uri, published);
-        c?
+        self._symbols:.insert(p.getModuleSymbol());
+        (p, thrown)?
     }
 
     /**

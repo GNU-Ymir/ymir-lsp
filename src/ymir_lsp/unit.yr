@@ -75,6 +75,15 @@ pub mod Unit {
     }
 
     /**
+     * @returns: the compilations of the whole package `dir`, of its sources
+     * and of its tests, none if it is not one
+     */
+    pub fn ofPackage(dir: Path)-> [Unit] {
+        if let Ok(cfg) = Unit::config(dir) return utils::wholePackage(dir, cfg);
+        []
+    }
+
+    /**
      * @returns: the configuration of the package `dir`, none if it has no readable one
      */
     pub fn config(dir: Path)-> (&Config)? {

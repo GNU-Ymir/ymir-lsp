@@ -8,10 +8,11 @@ use std::env;
 use std::config::{access, data};
 
 /**
- * @returns: the messages the server sent when given `input`, and its exit code
+ * @returns: the messages the server sent when given `input`, then `then` once
+ * it was idle for a second, and its exit code
  */
-fn session(input: [c8])-> ([&Config], i32) {
-    let dmut t = copy MemoryTransport(input);
+fn session(input: [c8], then: [c8] = "")-> ([&Config], i32) {
+    let dmut t = copy MemoryTransport(input, then-> then, pause-> 1000u64);
     let dmut c = copy Channel(alias t);
     let dmut s = copy Server(alias c);
     let code = s:.run();
@@ -46,6 +47,10 @@ fn response(msgs: [&Config], id: i64)-> &Config {
     }
 
     copy data::None()
+}
+
+fn names(syms: [&Config])-> [[c8]] {
+    copy [s.str("name") ?? "" for s in syms]
 }
 
 fn diagnostics(msgs: [&Config])-> [[&Config]] {
@@ -115,4 +120,48 @@ __test a_message_that_is_not_json_is_answered_with_an_error {
     let (msgs, _) = session(utils::frame("{not json"));
     assert(msgs.len == 1us);
     assert(msgs[0].int("error", "code") ?? 0i64 == -32700i64);
+}
+
+__test a_session_finds_the_declarations_of_the_packages_of_the_workspace {
+    let pkg = env::currentDir().push("test_resources/server/pkg");
+    let shapes = Document::ofPath(pkg.push("src/shapes.yr").toStr());
+    let renamed = "in shapes;\n\npub record Cube {\n    pub let side: i32;\n}\n";
+    let doc = "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(shapes)) ~ "}}";
+
+    let input = request(1i64, "initialize", "{\"rootUri\":" ~ std::config::json::dump(copy Str(Document::ofPath(pkg.toStr()))) ~ ",\"capabilities\":{}}")
+        ~ notification("initialized", "{}");
+
+    let then = request(2i64, "workspace/symbol", "{\"query\":\"Squ\"}")
+        ~ request(3i64, "workspace/symbol", "{\"query\":\"sc\"}")
+        ~ request(4i64, "workspace/symbol", "{\"query\":\"s\"}")
+        ~ request(5i64, "workspace/symbol", "{\"query\":\"println\"}")
+        ~ notification("textDocument/didOpen", "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(shapes)) ~ ",\"languageId\":\"ymir\",\"version\":1,\"text\":" ~ std::config::json::dump(copy Str(renamed)) ~ "}}")
+        ~ request(6i64, "textDocument/hover", at(doc, 2, 12))
+        ~ request(7i64, "workspace/symbol", "{\"query\":\"\"}")
+        ~ request(8i64, "shutdown", "null")
+        ~ notification("exit", "null");
+
+    let (msgs, code) = session(input, then-> then);
+    assert(code == 0);
+    assert(response(msgs, 1i64).boolean("result", "capabilities", "workspaceSymbolProvider") ?? false);
+
+    let square = response(msgs, 2i64).elements("result");
+    assert(square.len >= 1us && square[0].str("name") ?? "" == "Square");
+    assert(square[0].int("kind") ?? 0i64 == 23i64 && square[0].str("containerName") ?? "" == "shapes");
+    assert(square[0].str("location", "uri") ?? "" == shapes);
+    assert(square[0].int("location", "range", "start", "line") ?? 0i64 == 6i64);
+
+    // the overloads once each, and the declarations of the package before the ones of the std
+    assert(names(response(msgs, 3i64).elements("result"))[0us .. 2us] == ["scale", "scale"]);
+    let all = response(msgs, 4i64).elements("result");
+    assert(names(all)[0us .. 5us] == ["Shape", "Side", "Square", "scale", "scale"]);
+    assert(all[0].int("kind") ?? 0i64 == 11i64 && all[1].int("kind") ?? 0i64 == 5i64);
+    assert(all.len > 5us && all[5].str("location", "uri") ?? "" != shapes);
+
+    let println = response(msgs, 5i64).elements("result");
+    assert(println.len >= 1us && println[0].str("containerName") ?? "" == "std::io");
+
+    // the declarations of a changed document replace the ones of its file
+    let after = names(response(msgs, 7i64).elements("result"));
+    assert("Cube" in after && "Square" !in after && "Color" !in after && "main" in after);
 }

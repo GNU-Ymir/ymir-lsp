@@ -1,0 +1,9 @@
+mod .shapes;
+
+use shapes;
+use std::io;
+
+fn main () {
+    let s = scale (Square (2), 3);
+    println (s.side);
+}

@@ -3,6 +3,8 @@ package org.gnu.ymir.intellij
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.openapi.project.Project
 import com.redhat.devtools.lsp4ij.LanguageServerFactory
+import com.redhat.devtools.lsp4ij.client.features.LSPClientFeatures
+import com.redhat.devtools.lsp4ij.client.features.LSPWorkspaceSymbolFeature
 import com.redhat.devtools.lsp4ij.server.OSProcessStreamConnectionProvider
 import com.redhat.devtools.lsp4ij.server.StreamConnectionProvider
 
@@ -18,5 +20,16 @@ class YmirLanguageServerFactory : LanguageServerFactory {
             .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
         project.basePath?.let { commandLine.withWorkDirectory(it) }
         return OSProcessStreamConnectionProvider(commandLine)
+    }
+
+    /** The workspace symbols are listed by `YmirSymbolContributor`, with their module, rather than by LSP4IJ. */
+    override fun createClientFeatures(): LSPClientFeatures =
+        LSPClientFeatures().setWorkspaceSymbolFeature(object : LSPWorkspaceSymbolFeature() {
+            override fun isEnabled(): Boolean = false
+        })
+
+    companion object {
+        /** The id of the server in `plugin.xml`. */
+        const val SERVER_ID = "ymir"
     }
 }

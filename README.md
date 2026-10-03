@@ -1,8 +1,8 @@
 # ymir-lsp
 
 The language server of Ymir, built on the `ymirc` frontend (`libymirc`): diagnostics, hover,
-definition, references, outline, completion and quick fixes over the Language Server Protocol, on
-stdio or TCP. The repository also holds the IntelliJ plugin using it, in `intellij/`.
+definition, references, outline, workspace symbols, completion and quick fixes over the Language
+Server Protocol, on stdio or TCP. The repository also holds the IntelliJ plugin using it, in `intellij/`.
 
 ## The server
 
@@ -30,6 +30,12 @@ std its `[std]` resolved there if not the one of gyc, the `-fversion=` of its `f
 is checked once the client stopped changing it for 250ms, the unsaved buffers of the client
 standing in for their files, and its warnings are reported as such, as with `gyllir build`.
 
+The workspace symbols are the top-level declarations of the modules compiled, and of the modules
+of the std and of `.deps` they use, as of their latest compilation: the packages of the workspace
+folders are compiled whole, sources and tests, once the server is idle after the initialization
+and after each save, and a checked document replaces the declarations of its file. A query matches
+the names starting with its first character and holding the others in order.
+
 ## The IntelliJ plugin
 
 ```sh
@@ -50,6 +56,11 @@ A *Gyllir* run configuration runs `gyllir run`, `build` or `test` in a package, 
 the diagnostics of gyc linked to their file. A project rooted at a package gets its configurations
 when first opened (*Run* and *Test*, or *Test* and *Build* for a library), and the gutter of
 `fn main` and of each `__test` runs the package or its tests.
+
+*Go to Class* lists the structs, classes, enums, traits and type `def`s of the workspace symbols
+of the server, and *Go to Symbol* all of them, with the module declaring them. Those of the std
+and of `.deps`, which is excluded from a project rooted at a package, are listed with the
+non-project items.
 
 The build downloads the IDE of `platformVersion` (`gradle.properties`). To build against an
 installed one instead, set `platformLocalPath` to its directory, e.g. in
