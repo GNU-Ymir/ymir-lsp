@@ -220,6 +220,7 @@ pub class Server {
             "textDocument/hover"          => self:.hover(params)
             "textDocument/definition"     => self:.definition(params)
             "textDocument/references"     => self:.references(params)
+            "textDocument/documentHighlight" => self:.documentHighlight(params)
             "textDocument/documentSymbol" => self:.documentSymbol(params)
             "textDocument/completion"     => self:.completion(params)
             "textDocument/codeAction"     => self:.codeAction(params)
@@ -326,6 +327,7 @@ pub class Server {
         caps["hoverProvider"] = copy Bool(true);
         caps["definitionProvider"] = copy Bool(true);
         caps["referencesProvider"] = copy Bool(true);
+        caps["documentHighlightProvider"] = copy Bool(true);
         caps["documentSymbolProvider"] = copy Bool(true);
         caps["completionProvider"] = completion;
         caps["codeActionProvider"] = actions;
@@ -390,6 +392,21 @@ pub class Server {
             }
 
             return QueryExporting::dump(usages::references(occ, indexes, withDeclaration-> withDecl), self._encoding);
+        }
+
+        copy Array()
+    }
+
+    /**
+     * @returns: the tokens of the document naming the entity under the position
+     */
+    fn documentHighlight(mut self, params: &Config)-> &Config
+        throws RpcError
+    {
+        let (doc, c, line, col) = self:.position(params);
+        let index = c.parser.getIndex();
+        if let Ok(occ) = index.at(doc.path, line, col) {
+            return usages::highlights(occ, index, doc.path, self._encoding);
         }
 
         copy Array()
