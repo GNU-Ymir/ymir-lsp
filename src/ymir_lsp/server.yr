@@ -13,6 +13,7 @@ mod ::fixes;
 mod ::formatting;
 mod ::hover;
 mod ::symbols;
+mod ::usages;
 mod ::utils;
 
 use ymir_lsp::{document, format, transport, unit};
@@ -367,12 +368,31 @@ pub class Server {
         copy data::None()
     }
 
+    /**
+     * @returns: the tokens naming the entity under the position, in the
+     * compilation of the document and in the ones of the packages of the
+     * workspace folders
+     */
     fn references(mut self, params: &Config)-> &Config
         throws RpcError
     {
         let (doc, c, line, col) = self:.position(params);
         let withDecl = params.boolean("context", "includeDeclaration") ?? true;
-        QueryExporting::dump(NavigationQuery::references(c.parser.getIndex(), doc.path, line, col, withDeclaration-> withDecl), self._encoding)
+        let index = c.parser.getIndex();
+        if let Ok(occ) = index.at(doc.path, line, col) {
+            let mut indexes = copy [index];
+            for dir in self._folders {
+                for u in Unit::ofPackage(dir) {
+                    if let Ok(p) = self:.indexed(u, background-> false) {
+                        indexes ~= [p.parser.getIndex()];
+                    }
+                }
+            }
+
+            return QueryExporting::dump(usages::references(occ, indexes, withDeclaration-> withDecl), self._encoding);
+        }
+
+        copy Array()
     }
 
     fn documentSymbol(mut self, params: &Config)-> &Config {
