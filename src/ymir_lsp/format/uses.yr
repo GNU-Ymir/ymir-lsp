@@ -1,0 +1,163 @@
+/**
+ * The canonical form of the `use` declarations of a module, as yr-mode's
+ * `yr-optimize-imports` writes it: the paths merged, each once, the roots
+ * sorted with `std` last and separated by an empty line.
+ */
+in uses;
+
+use ymirc::syntax::declaration::module;
+use ymirc::syntax::expression::{literal, operator};
+
+use std::algorithm::sorting;
+
+/**
+ * @returns: the segments of the path imported by `u`, none if it is not a
+ * plain path
+ */
+pub fn segments(u: &UseDecl)-> ([[c8]])? {
+    if (u.isRoot || !u.name.isEof) return none;
+    let mut res: [[c8]] = [];
+    let mut e = u.path;
+    loop {
+        match e {
+            p: &PathExpr => {
+                if let v: &VarExpr = p.right {
+                    res = [v.loc.str] ~ res;
+                } else return none;
+                if (p.isRoot) return none;
+                e = p.left;
+            }
+            v: &VarExpr => {
+                res = [v.loc.str] ~ res;
+                break;
+            }
+            _ => return none;
+        }
+    }
+
+    res?
+}
+
+/**
+ * @returns: the declarations importing `paths`
+ */
+pub fn canonical(paths: [[[c8]]])-> [c8] {
+    let mut roots = keys(paths);
+    let mut ordered: [[c8]] = [];
+    for r in roots if r != "std" {
+        ordered ~= [r];
+    }
+
+    for r in roots if r == "std" {
+        ordered ~= [r];
+    }
+
+    let mut res = "";
+    for r in ordered {
+        if (res.len != 0us) res = res ~ "\n\n";
+        let decls = declarations(r, child(paths, r));
+        for j in 0us .. decls.len {
+            if (j != 0us) res = res ~ "\n";
+            res = res ~ decls[j];
+        }
+    }
+
+    res
+}
+
+/**
+ * @returns: the declarations importing the paths `paths` relative to `prefix`
+ */
+fn declarations(prefix: [c8], paths: [[[c8]]])-> [[c8]] {
+    let leaf = isLeaf(paths);
+    let ks = keys(paths);
+    if (!leaf && ks.len == 1us) return declarations(prefix ~ "::" ~ ks[0us], child(paths, ks[0us]));
+
+    let mut res: [[c8]] = [];
+    if (leaf) res ~= ["use " ~ prefix ~ ";"];
+
+    let mut entries: [[c8]] = [];
+    let mut nested: [[c8]] = [];
+    for k in ks {
+        let c = child(paths, k);
+        if (isLeafNode(c)) {
+            entries ~= [k];
+        } else if let Ok(direct) = directEntries(c) {
+            if (isLeaf(c)) entries ~= [k];
+            for d in direct {
+                entries ~= [k ~ "::" ~ d];
+            }
+        } else {
+            nested ~= declarations(prefix ~ "::" ~ k, c);
+        }
+    }
+
+    if (entries.len == 1us) res ~= ["use " ~ prefix ~ "::" ~ entries[0us] ~ ";"];
+    else if (entries.len > 1us) {
+        let mut list = "";
+        for j in 0us .. entries.len {
+            if (j != 0us) list = list ~ ", ";
+            list = list ~ entries[j];
+        }
+
+        res ~= ["use " ~ prefix ~ "::{" ~ list ~ "};"];
+    }
+
+    res ~ nested
+}
+
+/**
+ * @returns: the keys of `paths`, if it imports `_` and each of its keys is a
+ * leaf, none otherwise
+ */
+fn directEntries(paths: [[[c8]]])-> ([[c8]])? {
+    let ks = keys(paths);
+    if ("_" !in ks || !isLeafNode(child(paths, "_"))) return none;
+    for k in ks if !isLeafNode(child(paths, k)) {
+        return none;
+    }
+
+    ks?
+}
+
+fn isLeaf(paths: [[[c8]]])-> bool {
+    for p in paths if p.len == 0us {
+        return true;
+    }
+
+    false
+}
+
+fn isLeafNode(paths: [[[c8]]])-> bool {
+    isLeaf(paths) && keys(paths).len == 0us
+}
+
+/**
+ * @returns: the paths of `paths` starting with `key`, without it
+ */
+fn child(paths: [[[c8]]], key: [c8])-> [[[c8]]] {
+    let mut res: [[[c8]]] = [];
+    for p in paths if p.len != 0us && p[0us] == key {
+        res ~= [p[1us .. $]];
+    }
+
+    res
+}
+
+/**
+ * @returns: the first segments of `paths`, sorted, each once
+ */
+fn keys(paths: [[[c8]]])-> [[c8]] {
+    let mut all: [[c8]] = [];
+    for p in paths if p.len != 0us {
+        all ~= [p[0us]];
+    }
+
+    let sorted = sort(copy all, |a, b| => a < b);
+    let mut res: [[c8]] = [];
+    for k in sorted {
+        if (res.len == 0us || res[$ - 1us] != k) res ~= [k];
+    }
+
+    res
+}
