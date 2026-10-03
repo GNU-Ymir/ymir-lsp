@@ -23,19 +23,49 @@ fn package()-> Path {
         (".deps/sub/src/__lib__.yr", "in __lib__;\n")
     ];
 
-    {
-        let pkg = sys::tempDirectory(prefix-> "ymir-lsp-unit").push("pkg");
-        for f in files {
-            let (name, content) = f;
-            let file = pkg.push(name);
-            if (!sys::isDir(file.parent())) sys::createDir(file.parent(), recursive-> true);
-            sys::writeFile(file, content);
-        }
+    written(files)
+}
 
-        pkg
-    } catch {
-        _ => Path("/nonexistent/pkg")
+/**
+ * @returns: the package of the files `files`, in a new temporary directory
+ */
+fn written(files: [([c8], [c8])])-> Path {
+    let pkg = sys::tempDirectory(prefix-> "ymir-lsp-unit").push("pkg");
+    for f in files {
+        let (name, content) = f;
+        let file = pkg.push(name);
+        if (!sys::isDir(file.parent())) sys::createDir(file.parent(), recursive-> true);
+        sys::writeFile(file, content);
     }
+
+    pkg
+} catch {
+    _ => Path("/nonexistent/pkg")
+}
+
+/**
+ * @returns: a package of the targets `app`, linking `helpers` linking `core`,
+ * and depending on the target `two` of `dep`, in a new temporary directory
+ */
+fn targetsPackage()-> Path {
+    let files = copy [
+        ("gyllir.toml", "name = \"multi\"\n\n[targets.core]\ntype = \"library\"\nsource-dir = \"core\"\npackage-root = \"__lib__\"\nflags = [\"-nostdinc\", \"-fversion=Core\"]\ntests = false\n\n[targets.helpers]\ntype = \"library\"\nsource-dir = \"helpers\"\npackage-root = \"__lib__\"\nflags = [\"-I\", \"./core/\", \"-I../shared\"]\ntargets = [\"core\"]\ntests = false\n\n[targets.app]\ntype = \"executable\"\nsource-dir = \"app\"\ntest-dir = \"app-test\"\ndependencies = [\"dep\"]\ntargets = [\"helpers\"]\n\n[dependencies.dep]\nversion = \"master\"\ntargets = [\"two\"]\n\n[dependencies.other]\nversion = \"master\"\n"),
+        ("core/__lib__.yr", "in __lib__;\n"),
+        ("core/c.yr", "in c;\n"),
+        ("helpers/__lib__.yr", "in __lib__;\n"),
+        ("helpers/h.yr", "in h;\n"),
+        ("app/app.yr", "in app;\n"),
+        ("app/x.yr", "in x;\n"),
+        ("app-test/__test__.yr", "in __test__;\n"),
+        ("app-test/t.yr", "in t;\n"),
+        (".deps/dep/gyllir.toml", "name = \"dep\"\n\n[targets.one]\ntype = \"library\"\nsource-dir = \"one\"\n\n[targets.two]\ntype = \"library\"\nsource-dir = \"two\"\n"),
+        (".deps/dep/one/one.yr", "in one;\n"),
+        (".deps/dep/two/two.yr", "in two;\n"),
+        (".deps/other/gyllir.toml", "name = \"other\"\ntype = \"library\"\n"),
+        (".deps/other/src/__lib__.yr", "in __lib__;\n")
+    ];
+
+    written(files)
 }
 
 fn remove(pkg: Path) {
@@ -59,7 +89,7 @@ __test a_source_file_is_a_module_of_its_package {
     let u = Unit::compiling(pkg.push("src/a/b.yr"));
     assert(u.root.toStr() == pkg.push("src/main.yr").toStr());
     assert(u.module.toStr() == "a/b");
-    assert(paths(u.includes) == [pkg.push(".deps/dep/src/dep.yr").toStr(), pkg.push(".deps/sub/src/__lib__.yr").toStr()], joined(u.includes));
+    assert(paths(u.includes) == [pkg.push(".deps/sub/src/__lib__.yr").toStr(), pkg.push(".deps/dep/src/dep.yr").toStr()], joined(u.includes));
     assert(u.versions == ["Feature"]);
     assert(u.prefix.toStr() == pkg.push(".deps/std/.iprefix").toStr());
 
@@ -80,7 +110,7 @@ __test a_test_file_is_a_module_of_the_tests_of_its_package {
     assert(u.module.toStr() == "t");
 
     // the tests import the package itself
-    assert(paths(u.includes) == [pkg.push(".deps/dep/src/dep.yr").toStr(), pkg.push(".deps/sub/src/__lib__.yr").toStr(), pkg.push("src/main.yr").toStr()], joined(u.includes));
+    assert(paths(u.includes) == [pkg.push(".deps/sub/src/__lib__.yr").toStr(), pkg.push(".deps/dep/src/dep.yr").toStr(), pkg.push("src/main.yr").toStr()], joined(u.includes));
     remove(pkg);
 }
 
@@ -123,5 +153,37 @@ __test a_compilation_sees_its_package_its_imports_and_its_std {
 
     let lone = Unit::compiling(pkg.push("notes/x.yr"));
     assert(lone.sees(pkg.push("notes/y.yr")) && !lone.sees(pkg.push("src/main.yr")));
+    remove(pkg);
+}
+
+__test a_target_compiles_against_the_targets_it_links_and_the_dependencies_it_selects {
+    let pkg = targetsPackage();
+    let u = Unit::compiling(pkg.push("app/x.yr"));
+    assert(u.root.toStr() == pkg.push("app/app.yr").toStr() && u.module.toStr() == "x");
+    assert(paths(u.includes) == [pkg.push(".deps/dep/two/two.yr").toStr(), pkg.push("core/__lib__.yr").toStr(), pkg.push("helpers/__lib__.yr").toStr()], joined(u.includes));
+    assert(u.versions.len == 0us && !u.standalone);
+
+    let t = Unit::compiling(pkg.push("app-test/t.yr"));
+    assert(t.root.toStr() == pkg.push("app-test/__test__.yr").toStr() && t.module.toStr() == "t");
+    assert(paths(t.includes) == paths(u.includes) ~ [pkg.push("app/app.yr").toStr()], joined(t.includes));
+    remove(pkg);
+}
+
+__test a_target_compiles_with_the_options_of_its_flags {
+    let pkg = targetsPackage();
+    let h = Unit::compiling(pkg.push("helpers/h.yr"));
+    assert(h.root.toStr() == pkg.push("helpers/__lib__.yr").toStr() && h.module.toStr() == "h");
+    assert(paths(h.includes) == [pkg.push("core/__lib__.yr").toStr(), pkg.push("core").toStr(), pkg.parent().push("shared").toStr()], joined(h.includes));
+    assert(h.sees(pkg.push("core/c.yr")) && !h.sees(pkg.push("app/x.yr")));
+
+    let c = Unit::compiling(pkg.push("core/c.yr"));
+    assert(c.standalone && c.versions == ["Core"] && c.includes.len == 0us);
+    remove(pkg);
+}
+
+__test a_package_is_compiled_whole_by_target {
+    let pkg = targetsPackage();
+    let units = Unit::ofPackage(pkg);
+    assert(paths(copy [u.root for u in units]) == [pkg.push("app/app.yr").toStr(), pkg.push("app-test/__test__.yr").toStr(), pkg.push("core/__lib__.yr").toStr(), pkg.push("helpers/__lib__.yr").toStr()]);
     remove(pkg);
 }
