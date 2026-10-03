@@ -1,0 +1,678 @@
+/**
+ * The layout of a source file: its tokens and comments, and the places a line
+ * can break at, rendered on lines of a maximal width.
+ */
+in doc;
+
+use std::stream;
+
+pub enum DocKind : u8
+| TOKEN  = 0u8  // tokens of the source, written as they are
+| TEXT   = 1u8  // a comment or spaces, continuation lines indented from its column
+| SPLIT  = 2u8  // a string literal, split by `~` when it overflows
+| LINE   = 3u8  // a space, or a line break in a broken group
+| SOFT   = 4u8  // nothing, or a line break in a broken group
+| HARD   = 5u8  // a line break
+| BLANK  = 6u8  // an empty line
+| GROUP  = 7u8  // flat if it fits on the line, broken otherwise
+| INDENT = 8u8  // its line breaks indented by `n` more columns
+| ALIGN  = 9u8  // its line breaks indented to the column it starts at
+| CONCAT = 10u8
+| LIST   = 11u8 // the opening, the items, and the closing of a list, `n` being its first named item
+| FILL   = 12u8 // items separated by a space, or a line break before the ones that do not fit
+| FILLSEP = 13u8 // the separator of a broken fill before its item
+| RAW    = 14u8; // text written as it is
+
+@final
+pub class Doc {
+
+    pub let kind: DocKind;
+
+    pub let text: [c8];
+
+    // The tokens a TOKEN or a SPLIT writes
+    pub let first: usize;
+    pub let last: usize;
+
+    pub let children: [&Doc];
+
+    pub let n: usize;
+
+    // Whether it holds a line break that cannot be flattened
+    pub let hard: bool;
+
+    // Its width once flat, up to the first line break of its texts
+    pub let width: usize;
+
+    pub self (kind: DocKind, text: [c8] = "", first: usize = 0us, last: usize = 0us, children: [&Doc] = [], n: usize = 0us)
+        with kind = kind
+        , text = text
+        , first = first
+        , last = last
+        , children = children
+        , n = n
+        , hard = hardOf(kind, children)
+        , width = widthOf(kind, text, children)
+    {}
+}
+
+/**
+ * The constructors of the documents
+ */
+pub mod Doc {
+
+    pub fn token(text: [c8], first: usize, last: usize)-> &Doc {
+        copy Doc(DocKind::TOKEN, text-> text, first-> first, last-> last)
+    }
+
+    pub fn split(text: [c8], i: usize)-> &Doc {
+        copy Doc(DocKind::SPLIT, text-> text, first-> i, last-> i)
+    }
+
+    pub fn text(text: [c8])-> &Doc {
+        copy Doc(DocKind::TEXT, text-> text)
+    }
+
+    pub fn mk(kind: DocKind)-> &Doc {
+        copy Doc(kind)
+    }
+
+    pub fn concat(children: [&Doc])-> &Doc {
+        copy Doc(DocKind::CONCAT, children-> children)
+    }
+
+    pub fn group(child: &Doc)-> &Doc {
+        copy Doc(DocKind::GROUP, children-> copy [child])
+    }
+
+    pub fn indent(n: usize, child: &Doc)-> &Doc {
+        copy Doc(DocKind::INDENT, children-> copy [child], n-> n)
+    }
+
+    pub fn align(child: &Doc)-> &Doc {
+        copy Doc(DocKind::ALIGN, children-> copy [child])
+    }
+}
+
+fn hardOf(kind: DocKind, children: [&Doc])-> bool {
+    if (kind == DocKind::HARD || kind == DocKind::BLANK) return true;
+    for c in children if c.hard {
+        return true;
+    }
+
+    false
+}
+
+fn widthOf(kind: DocKind, text: [c8], children: [&Doc])-> usize {
+    match kind {
+        DocKind::TOKEN | DocKind::TEXT | DocKind::SPLIT | DocKind::RAW => return firstLine(text);
+        DocKind::LINE => return 1us;
+        DocKind::LIST => {
+            let mut w = 0us;
+            for c in children {
+                w += c.width;
+            }
+
+            if (children.len > 3us) w += children.len - 3us;
+            return w;
+        }
+        DocKind::FILL => {
+            let mut w = 0us;
+            for c in children {
+                w += c.width;
+            }
+
+            if (children.len > 1us) w += children.len - 1us;
+            return w;
+        }
+        DocKind::FILLSEP => return 1us;
+        _ => {}
+    }
+
+    let mut w = 0us;
+    for c in children {
+        w += c.width;
+    }
+
+    w
+}
+
+fn firstLine(text: [c8])-> usize {
+    for i in 0us .. text.len if text[i] == '\n' {
+        return source::width(text[0us .. i]);
+    }
+
+    source::width(text)
+}
+
+/**
+ * The document of a sequence of tokens, built from its start to its end, the
+ * groups opened being closed in the reverse order
+ */
+@final
+pub class Builder {
+
+    // The children of the group being built, and of the ones it is in
+    let mut _current: [&Doc] = [];
+    let mut _frames: [[&Doc]] = [];
+
+    let mut _kinds: [DocKind] = [];
+    let mut _ns: [usize] = [];
+
+    pub self () {}
+
+    pub fn add(mut self, d: &Doc) {
+        self._current ~= [d];
+    }
+
+    pub fn open(mut self, kind: DocKind, n: usize = 0us) {
+        self._frames ~= [self._current];
+        self._current = [];
+        self._kinds ~= [kind];
+        self._ns ~= [n];
+    }
+
+    pub fn close(mut self) {
+        let children = self._current;
+        let kind = self._kinds[$ - 1us];
+        let n = self._ns[$ - 1us];
+        self._current = self._frames[$ - 1us];
+        self._frames = self._frames[0us .. $ - 1us];
+        self._kinds = self._kinds[0us .. $ - 1us];
+        self._ns = self._ns[0us .. $ - 1us];
+        if (kind == DocKind::GROUP || kind == DocKind::INDENT || kind == DocKind::ALIGN) {
+            self._current ~= [copy Doc(kind, children-> copy [Doc::concat(children)], n-> n)];
+        } else {
+            self._current ~= [copy Doc(kind, children-> children, n-> n)];
+        }
+    }
+
+    /**
+     * @returns: the number of groups opened and not closed yet
+     */
+    pub fn depth(self)-> usize {
+        self._frames.len
+    }
+
+    pub fn finish(mut self)-> &Doc {
+        while (self._frames.len != 0us) {
+            self:.close();
+        }
+
+        Doc::concat(self._current)
+    }
+}
+
+/**
+ * Where the tokens of a document were written
+ */
+pub record Span {
+
+    pub let first: usize;
+    pub let last: usize;
+
+    // The offsets of the text written for them
+    pub let start: usize;
+    pub let end: usize;
+
+    pub self (first: usize, last: usize, start: usize, end: usize)
+        with first = first
+        , last = last
+        , start = start
+        , end = end
+    {}
+}
+
+/**
+ * The text of a document, on lines of at most `width` characters where its
+ * groups allow it
+ */
+@final
+pub class Renderer {
+
+    let _width: usize;
+
+    let dmut _out: &StringStream = copy StringStream();
+
+    // The bytes written in `_out`
+    let mut _written: usize = 0us;
+
+    // The line being written, and its bytes that are tokens, not to be trimmed
+    let mut _line: [c8] = "";
+    let mut _kept: usize = 0us;
+
+    let mut _col: usize = 0us;
+
+    // Whether the last line written is empty
+    let mut _blank: bool = true;
+
+    // The widest line written
+    let mut _max: usize = 0us;
+
+    // The lines written
+    let mut _lines: usize = 0us;
+
+    let mut _spans: [Span] = [];
+
+    pub self (width: usize, col: usize = 0us)
+        with _width = width
+        , _line = spaces(col)
+        , _col = col
+    {}
+
+    /**
+     * Write `doc`, its line breaks indented by `ind`, flat if `flat`
+     */
+    pub fn render(mut self, doc: &Doc, ind: usize = 0us, flat: bool = false) {
+        let mut stack: [(usize, bool, &Doc)] = copy [(ind, flat, doc)];
+        while (stack.len != 0us) {
+            let (i, f, d) = stack[$ - 1us];
+            stack = stack[0us .. $ - 1us];
+            match d.kind {
+                DocKind::TOKEN => self:.token(d.text, d.first, d.last);
+                DocKind::RAW   => self:.raw(d.text);
+                DocKind::TEXT  => self:.write(d.text);
+                DocKind::SPLIT => self:.split(d);
+                DocKind::LINE  => {
+                    if (f) self:.write(" ");
+                    else self:.newline(i);
+                }
+                DocKind::SOFT  => {
+                    if (!f) self:.newline(i);
+                }
+                DocKind::HARD  => self:.newline(i);
+                DocKind::BLANK => self:.blank(i);
+                DocKind::GROUP => {
+                    let flatten = f || (!d.hard && self.fits((i, true, d.children[0us]), stack));
+                    stack ~= [(i, flatten, d.children[0us])];
+                }
+                DocKind::INDENT => {
+                    stack ~= [(i + d.n, f, d.children[0us])];
+                }
+                DocKind::ALIGN => {
+                    stack ~= [(self._col, f, d.children[0us])];
+                }
+                DocKind::CONCAT => {
+                    for j in 0us .. d.children.len {
+                        stack ~= [(i, f, d.children[d.children.len - 1us - j])];
+                    }
+                }
+                DocKind::LIST => {
+                    if (f || (!d.hard && self.fits((i, true, d), stack))) {
+                        stack ~= [(i, true, flatList(d))];
+                    } else {
+                        stack ~= [(i, false, self.brokenList(d, i))];
+                    }
+                }
+                DocKind::FILL => {
+                    let flatten = f || (!d.hard && self.fits((i, true, d), stack));
+                    for j in 0us .. d.children.len {
+                        let k = d.children.len - 1us - j;
+                        stack ~= [(i, flatten, d.children[k])];
+                        if (k != 0us) stack ~= [(i, flatten, copy Doc(DocKind::FILLSEP, children-> copy [d.children[k]]))];
+                    }
+                }
+                DocKind::FILLSEP => {
+                    if (f || (!d.children[0us].hard && self.fitsAfterSpace(d.children[0us], i, stack))) self:.write(" ");
+                    else self:.newline(i);
+                }
+            }
+        }
+    }
+
+    /**
+     * @returns: whether a space then `d` fit on the current line
+     */
+    fn fitsAfterSpace(self, d: &Doc, ind: usize, rest: [(usize, bool, &Doc)])-> bool {
+        if (self._col + 1us + d.width > self._width) return false;
+        let dmut r = copy Renderer(self._width, col-> self._col + 1us);
+        r.fits((ind, true, d), rest[0us .. (if (rest.len != 0us) { rest.len - 1us } else { 0us })])
+    }
+
+    /**
+     * @returns: the text written, ending with a line break
+     */
+    pub fn finish(mut self)-> [c8] {
+        self:.flush();
+        self._out[]
+    }
+
+    /**
+     * @returns: where the tokens were written
+     */
+    pub fn spans(self)-> [Span] {
+        self._spans
+    }
+
+    /**
+     * @returns: the width of the widest line written
+     */
+    pub fn widest(self)-> usize {
+        let cur = source::width(self._line);
+        if (cur > self._max) return cur;
+        self._max
+    }
+
+    /*!
+     * ====================================================================================================
+     * =======================================          LISTS          ====================================
+     * ====================================================================================================
+     */
+
+    /**
+     * @returns: the layout of the broken list `d`: its items aligned after its
+     * opening, or indented on the lines following it when they would
+     * overflow there, its positional items sharing a line when they fit, and
+     * each named one on its own
+     */
+    fn brokenList(self, d: &Doc, ind: usize)-> &Doc {
+        let open = d.children[0us];
+        let close = d.children[$ - 1us];
+        let items = d.children[1us .. $ - 1us];
+
+        let mut body: [&Doc] = [];
+        if (d.n != 0us) {
+            let mut pos: [&Doc] = [];
+            for j in 0us .. d.n {
+                if (j != 0us) pos ~= [Doc::mk(DocKind::LINE)];
+                pos ~= [items[j]];
+            }
+
+            body ~= [Doc::group(Doc::concat(pos))];
+        }
+
+        for j in d.n .. items.len {
+            if (body.len != 0us) body ~= [Doc::mk(DocKind::LINE)];
+            body ~= [items[j]];
+        }
+
+        let aligned = Doc::concat(copy [open, Doc::align(Doc::concat(body)), close]);
+        let (a, aLines) = self.trial(aligned, ind);
+        if (a <= self._width && aLines <= items.len) return aligned;
+
+        let indented = Doc::concat(copy [open, Doc::indent(4us, Doc::concat(copy [Doc::mk(DocKind::SOFT)] ~ body)), Doc::mk(DocKind::SOFT), close]);
+        let (b, bLines) = self.trial(indented, ind);
+        if (a <= self._width && (aLines <= bLines || b > self._width)) return aligned;
+        if (b <= self._width || b < a) return indented;
+        aligned
+    }
+
+    /**
+     * @returns: the width of the widest line of `d` rendered broken from the
+     * current column, and its number of lines
+     */
+    fn trial(self, d: &Doc, ind: usize)-> (usize, usize) {
+        let dmut r = copy Renderer(self._width, col-> self._col);
+        r:.render(d, ind-> ind);
+        (r.widest(), r._lines + 1us)
+    }
+
+    /*!
+     * ====================================================================================================
+     * =======================================          FITTING          ==================================
+     * ====================================================================================================
+     */
+
+    /**
+     * @returns: whether `first`, then what follows it on its line, fits in
+     * what is left of the current line
+     */
+    fn fits(self, first: (usize, bool, &Doc), rest: [(usize, bool, &Doc)])-> bool {
+        let mut rem = cast!i64(self._width) - cast!i64(self._col);
+        let mut cmds: [(usize, bool, &Doc)] = copy [first];
+        let mut next = rest.len;
+        while (rem >= 0i64) {
+            if (cmds.len == 0us) {
+                if (next == 0us) return true;
+                next -= 1us;
+                cmds = copy [rest[next]];
+            }
+
+            let (i, f, d) = cmds[$ - 1us];
+            cmds = cmds[0us .. $ - 1us];
+            match d.kind {
+                DocKind::TOKEN | DocKind::TEXT | DocKind::SPLIT | DocKind::RAW => {
+                    rem -= cast!i64(d.width);
+                    if (d.text.len != 0us && hasLineBreak(d.text)) return rem >= 0i64;
+                }
+                DocKind::LINE => {
+                    if (!f) return true;
+                    rem -= 1i64;
+                }
+                DocKind::SOFT => {
+                    if (!f) return true;
+                }
+                DocKind::HARD | DocKind::BLANK => return true;
+                DocKind::GROUP => {
+                    cmds ~= [(i, f && !d.hard, d.children[0us])];
+                }
+                DocKind::INDENT | DocKind::ALIGN => {
+                    cmds ~= [(i, f, d.children[0us])];
+                }
+                DocKind::CONCAT => {
+                    for j in 0us .. d.children.len {
+                        cmds ~= [(i, f, d.children[d.children.len - 1us - j])];
+                    }
+                }
+                DocKind::LIST => {
+                    if (f) {
+                        cmds ~= [(i, true, flatList(d))];
+                    } else {
+                        rem -= cast!i64(d.children[0us].width);
+                        return rem >= 0i64;
+                    }
+                }
+                DocKind::FILL => {
+                    if (f) {
+                        rem -= cast!i64(d.width);
+                    } else {
+                        rem -= cast!i64(d.children[0us].width);
+                        return rem >= 0i64;
+                    }
+                }
+                DocKind::FILLSEP => {
+                    if (!f) return true;
+                    rem -= 1i64;
+                }
+            }
+        }
+
+        false
+    }
+
+    /*!
+     * ====================================================================================================
+     * =======================================          WRITING          ==================================
+     * ====================================================================================================
+     */
+
+    fn token(mut self, text: [c8], first: usize, last: usize) {
+        let start = self._written + self._line.len;
+        let mut lineStart = 0us;
+        for j in 0us .. text.len if text[j] == '\n' {
+            self._line = self._line ~ text[lineStart .. j];
+            self:.endLine(trim-> false);
+            lineStart = j + 1us;
+        }
+
+        self._line = self._line ~ text[lineStart .. $];
+        self._kept = self._line.len;
+        self._col = source::width(self._line);
+        self._spans ~= [Span(first, last, start, self._written + self._line.len)];
+    }
+
+    /**
+     * Write `text` as it is
+     */
+    fn raw(mut self, text: [c8]) {
+        let mut lineStart = 0us;
+        for j in 0us .. text.len if text[j] == '\n' {
+            self._line = self._line ~ text[lineStart .. j];
+            self:.endLine(trim-> false);
+            lineStart = j + 1us;
+        }
+
+        self._line = self._line ~ text[lineStart .. $];
+        self._col = source::width(self._line);
+    }
+
+    /**
+     * Write `text`, its continuation lines indented by the column it starts at
+     */
+    fn write(mut self, text: [c8]) {
+        let base = self._col;
+        let mut lineStart = 0us;
+        for j in 0us .. text.len if text[j] == '\n' {
+            self._line = self._line ~ text[lineStart .. j];
+            self:.endLine(trim-> true);
+            self._line = spaces(base);
+            lineStart = j + 1us;
+        }
+
+        self._line = self._line ~ text[lineStart .. $];
+        self._col = source::width(self._line);
+    }
+
+    /**
+     * Write the string literal `d`, split at spaces into literals joined by
+     * `~` on lines aligned on its start if it overflows
+     */
+    fn split(mut self, d: &Doc) {
+        if (self._col + d.width <= self._width || d.text.len < 3us) {
+            self:.token(d.text, d.first, d.last);
+            return;
+        }
+
+        let base = self._col;
+        let start = self._written + self._line.len;
+        let mut rest = d.text[1us .. $ - 1us];
+        let mut lead = "\"";
+        loop {
+            let avail = cast!i64(self._width) - cast!i64(self._col) - cast!i64(lead.len) - 1i64;
+            let cut = if (cast!i64(source::width(rest)) <= avail) { rest.len } else { cutAt(rest, avail) };
+            if (cut == 0us || cut >= rest.len) {
+                self._line = self._line ~ lead ~ rest ~ "\"";
+                break;
+            }
+
+            self._line = self._line ~ lead ~ rest[0us .. cut] ~ "\"";
+            self._kept = self._line.len;
+            self:.endLine(trim-> true);
+            self._line = spaces(base);
+            self._col = base;
+            rest = rest[cut .. $];
+            lead = "~ \"";
+        }
+
+        self._kept = self._line.len;
+        self._col = source::width(self._line);
+        self._spans ~= [Span(d.first, d.last, start, self._written + self._line.len)];
+    }
+
+    fn newline(mut self, ind: usize) {
+        if (self._kept != 0us || !isBlank(self._line)) {
+            self:.endLine(trim-> true);
+        }
+
+        self._line = spaces(ind);
+        self._col = ind;
+    }
+
+    fn blank(mut self, ind: usize) {
+        self:.newline(ind);
+        if (!self._blank) {
+            self._line = "";
+            self:.endLine(trim-> true);
+        }
+
+        self._line = spaces(ind);
+        self._col = ind;
+    }
+
+    /**
+     * End the current line, its trailing spaces removed if `trim`
+     */
+    fn endLine(mut self, trim: bool) {
+        let mut line = self._line;
+        if (trim) {
+            let mut e = line.len;
+            while (e > self._kept && (line[e - 1us] == ' ')) { e -= 1us; }
+            line = line[0us .. e];
+        }
+
+        let w = source::width(line);
+        if (w > self._max) self._max = w;
+        self._lines += 1us;
+        self._out:.write(line);
+        self._out:.write('\n');
+        self._written += line.len + 1us;
+        self._blank = (line.len == 0us);
+        self._line = "";
+        self._kept = 0us;
+        self._col = 0us;
+    }
+
+    fn flush(mut self) {
+        let mut e = self._line.len;
+        while (e > self._kept && self._line[e - 1us] == ' ') { e -= 1us; }
+        if (e != 0us) {
+            self._line = self._line[0us .. e];
+            self:.endLine(trim-> false);
+        }
+    }
+}
+
+/**
+ * @returns: the list `d` written on a line
+ */
+fn flatList(d: &Doc)-> &Doc {
+    let mut parts: [&Doc] = copy [d.children[0us]];
+    let items = d.children[1us .. $ - 1us];
+    for j in 0us .. items.len {
+        if (j != 0us) parts ~= [Doc::mk(DocKind::LINE)];
+        parts ~= [items[j]];
+    }
+
+    parts ~= [d.children[$ - 1us]];
+    Doc::concat(parts)
+}
+
+/**
+ * @returns: where to cut the content of a string literal for its head to be
+ * at most `avail` characters long: after the last space fitting, or after the
+ * first one when none does; 0 when it has none
+ */
+fn cutAt(content: [c8], avail: i64)-> usize {
+    let mut best = 0us;
+    let mut chars = 0i64;
+    for k in 0us .. content.len {
+        if ((cast!u8(content[k]) & 0xC0u8) != 0x80u8) chars += 1i64;
+        let isCut = content[k] == ' ' && (k == 0us || content[k - 1us] != '\\') && k + 1us < content.len;
+        if (isCut) {
+            if (chars <= avail || best == 0us) best = k + 1us;
+            if (chars > avail) break;
+        }
+    }
+
+    best
+}
+
+fn hasLineBreak(text: [c8])-> bool {
+    for c in text if c == '\n' {
+        return true;
+    }
+
+    false
+}
+
+fn isBlank(s: [c8])-> bool {
+    for c in s if c != ' ' {
+        return false;
+    }
+
+    true
+}
+
+fn spaces(n: usize)-> [c8] {
+    copy [' ' ; n]
+}
