@@ -39,5 +39,45 @@ object GyllirPackages {
         return if (isLibrary(pkg.toNioPath())) GyllirCommand.TEST else GyllirCommand.RUN
     }
 
+    /**
+     * The targets of the package `dir` by name: its `[targets.<name>]` tables,
+     * or the target named after the package when it declares none.
+     */
+    fun targets(dir: Path): Map<String, GyllirTarget> {
+        val lines = runCatching { Files.readAllLines(dir.resolve(MANIFEST)) }.getOrDefault(emptyList())
+        val root = mutableMapOf<String, String>()
+        val tables = linkedMapOf<String, MutableMap<String, String>>()
+        var table: MutableMap<String, String>? = root
+        for (line in lines) {
+            val header = HEADER.matchEntire(line)
+            if (header != null) {
+                val target = TARGET.matchEntire(header.groupValues[1].trim())
+                table = target?.let { tables.getOrPut(it.groupValues[1].ifEmpty { it.groupValues[2] }) { mutableMapOf() } }
+                continue
+            }
+            val entry = ENTRY.matchEntire(line) ?: continue
+            table?.put(entry.groupValues[1], entry.groupValues[2].removeSurrounding("\""))
+        }
+
+        if (tables.isEmpty()) {
+            val name = root["name"] ?: dir.fileName.toString()
+            return mapOf(name to GyllirTarget(name, root, name))
+        }
+        return tables.mapValues { (name, entries) -> GyllirTarget(name, entries, entries["output"] ?: name) }
+    }
+
     private val TYPE_LIBRARY = Regex("""^\s*type\s*=\s*"library"\s*(#.*)?$""")
+    private val HEADER = Regex("""^\s*\[([^\[\]]+)]\s*(#.*)?$""")
+    private val TARGET = Regex("""targets\.(?:"([^"]+)"|([A-Za-z0-9_-]+))""")
+    private val ENTRY = Regex("""^\s*([A-Za-z0-9_-]+)\s*=\s*("[^"]*"|true|false)\s*(#.*)?$""")
+}
+
+/**
+ * A target of a gyllir package, producing `output` in the directory of the
+ * package, and `output.test` for its tests.
+ */
+data class GyllirTarget(val name: String, val library: Boolean, val tests: Boolean, val output: String) {
+
+    constructor(name: String, entries: Map<String, String>, output: String) :
+        this(name, entries["type"] == "library", entries["tests"] != "false", output)
 }
