@@ -6,7 +6,7 @@ in format;
 
 mod ::doc;
 mod ::printer;
-mod ::source;
+pub mod ::source;
 mod ::uses;
 
 use ymir_lsp::format::{doc, printer, source};
