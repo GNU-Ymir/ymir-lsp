@@ -70,11 +70,22 @@ pub class Server {
     // to be read again, by `Unit::key`
     let dmut _unindexed: [[c8] => Unit] = copy [];
 
+    // The change the declarations of the packages of the folders were last
+    // read after, by `Unit::key`
+    let dmut _indexed: [[c8] => u64] = copy [];
+
     // The session of the compilation in progress, cancelled by a change
     let dmut _compiling: (&Session)? = none;
 
+    // Whether the compilation in progress only reads declarations, cancelled by any message
+    let mut _background: bool = false;
+
     // Moved forward by every change of an open document
     let mut _generation: u64 = 0u64;
+
+    // The latest change of the documents, by path, and whether the document is
+    // in no package, any compilation being able to read it then
+    let dmut _changes: [[c8] => (u64, bool)] = copy [];
 
     let mut _encoding: PositionEncoding = PositionEncoding::UTF16;
 
@@ -122,12 +133,8 @@ pub class Server {
         loop {
             if let Ok(body) = self._channel:.receive() {
                 let msg = if let Ok(m) = std::config::json::parse(body)? { m } else { copy Dict() };
-                if let Ok(method) = msg.str("method") {
-                    if (method == "textDocument/didChange" || method == "textDocument/didClose" || method == "exit") {
-                        self:.cancelCompilation();
-                    }
-                }
-
+                let method = msg.str("method") ?? "";
+                self:.cancelCompilation(always-> method == "textDocument/didChange" || method == "textDocument/didClose" || method == "exit");
                 self:.post(msg);
             } else {
                 self:.post(copy data::None());
@@ -141,9 +148,12 @@ pub class Server {
         self._received:.post();
     }
 
-    fn cancelCompilation(mut self) {
+    /**
+     * Cancel the compilation in progress if it only reads declarations, or if `always`
+     */
+    fn cancelCompilation(mut self, always: bool) {
         atomic self {
-            if let Ok(dmut s) = alias self._compiling {
+            if let Ok(dmut s) = alias self._compiling && (always || self._background) {
                 s:.cancel();
             }
         }
@@ -484,7 +494,29 @@ pub class Server {
     fn change(mut self, doc: Document) {
         self._docs[doc.uri] = doc;
         self._dirty[doc.uri] = ();
+        self:.changed(doc.path);
+    }
+
+    /**
+     * Move the generation forward, as the latest change of the document `path`
+     */
+    fn changed(mut self, path: [c8]) {
         self._generation += 1u64;
+        if (path == "") return;
+
+        let lone = if let Ok(c) = self._changes[path] { c._1 } else { Unit::compiling(Path(path)).module.isEmpty() };
+        self._changes[path] = (self._generation, lone);
+    }
+
+    /**
+     * @returns: whether a document `unit` reads changed after the change `generation`
+     */
+    fn changedSince(self, unit: Unit, generation: u64)-> bool {
+        for path, c in self._changes {
+            if (c._0 > generation && (c._1 || unit.sees(Path(path)))) return true;
+        }
+
+        false
     }
 
     fn close(mut self, uri: [c8]) {
@@ -492,7 +524,7 @@ pub class Server {
             self._docs:.remove(uri);
             self._compiled:.remove(uri);
             self._dirty:.remove(uri);
-            self._generation += 1u64;
+            self:.changed(doc.path);
 
             if (doc.path != "") {
                 let key = Unit::compiling(Path(doc.path)).key();
@@ -523,33 +555,42 @@ pub class Server {
             if let Ok(u) = self._unindexed[key] {
                 if let Ok(_) = self:.compile(u, index-> false) {
                     self._unindexed:.remove(key);
+                    self._indexed[key] = self._generation;
                 }
             }
         }
     }
 
     /**
-     * Read again the declarations of the packages of the workspace folders
+     * Read again the declarations of the packages of the workspace folders,
+     * the ones a document they read changed in since they were last read
      */
     fn reindex(mut self) {
         for dir in self._folders {
             for u in Unit::ofPackage(dir) {
-                self._unindexed[u.key()] = u;
+                let key = u.key();
+                if let Ok(g) = self._indexed[key] && (!self.changedSince(u, g)) continue;
+                self._unindexed[key] = u;
             }
         }
     }
 
     /**
      * @returns: the compilation of the open document `uri` after the latest
-     * change, none if it is not a file, or if its compilation was cancelled
+     * change of the documents it reads, none if it is not a file, or if its
+     * compilation was cancelled
      */
     fn compiled(mut self, uri: [c8])-> (Compiled)? {
-        if let Ok(c) = self._compiled[uri] {
-            if (c.generation == self._generation) return c?;
+        let doc = if let Ok(d) = self._docs[uri] { d } else { return none; };
+        if let Ok(c) = self._compiled[uri] && (!self.changedSince(c.unit, c.generation)) {
+            self._dirty:.remove(uri);
+            return c?;
         }
 
-        let doc = if let Ok(d) = self._docs[uri] { d } else { return none; };
-        if (doc.path == "") return none;
+        if (doc.path == "") {
+            self._dirty:.remove(uri);
+            return none;
+        }
 
         let unit = Unit::compiling(Path(doc.path));
         let (p, thrown) = if let Ok(r) = self:.compile(unit, index-> true) { r } else { return none; };
@@ -564,7 +605,7 @@ pub class Server {
 
         session:.exit();
 
-        let c = Compiled(p, doc.text, self._generation);
+        let c = Compiled(p, unit, doc.text, self._generation);
         self._compiled[uri] = c;
         self._dirty:.remove(uri);
         self:.publish(uri, published);
@@ -587,6 +628,7 @@ pub class Server {
         let dmut p = copy Parser::inSession(alias session, unit.root.toStr(), overlay-> overlay, index-> index);
         atomic self {
             self._compiling = (alias session)?;
+            self._background = !index;
         }
 
         let mut thrown: [&ErrorMsg] = [];

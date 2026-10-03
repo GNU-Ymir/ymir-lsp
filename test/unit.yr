@@ -109,3 +109,19 @@ __test a_package_is_compiled_whole_with_its_tests {
     assert(Unit::ofPackage(pkg.push("src")).len == 0us);
     remove(pkg);
 }
+
+__test a_compilation_sees_its_package_its_imports_and_its_std {
+    let pkg = package();
+    let src = Unit::compiling(pkg.push("src/a/b.yr"));
+    assert(src.sees(pkg.push("src/main.yr")) && src.sees(pkg.push(".deps/sub/src/__lib__.yr")));
+    assert(src.sees(pkg.push(".deps/std/.iprefix/include/ymir/1.14/__lib__.yr")));
+    assert(!src.sees(pkg.push("test/t.yr")) && !src.sees(pkg.push("notes/x.yr")));
+
+    // the tests read the sources of the package
+    let tests = Unit::compiling(pkg.push("test/t.yr"));
+    assert(tests.sees(pkg.push("src/a/b.yr")) && tests.sees(pkg.push("test/t.yr")));
+
+    let lone = Unit::compiling(pkg.push("notes/x.yr"));
+    assert(lone.sees(pkg.push("notes/y.yr")) && !lone.sees(pkg.push("src/main.yr")));
+    remove(pkg);
+}

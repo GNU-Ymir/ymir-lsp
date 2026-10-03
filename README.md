@@ -29,12 +29,14 @@ a file of `test/` a module of `test/__test__.yr`, with the packages of `.deps/` 
 std its `[std]` resolved there if not the one of gyc, the `-fversion=` of its `flags`, and the
 `__test` blocks. Any other file is checked alone. A document
 is checked once the client stopped changing it for 250ms, the unsaved buffers of the client
-standing in for their files, and its warnings are reported as such, as with `gyllir build`.
+standing in for their files, and its warnings are reported as such, as with `gyllir build`. A
+save checks again the open documents reading a document changed since their latest check.
 
 The workspace symbols are the top-level declarations of the modules compiled, and of the modules
 of the std and of `.deps` they use, as of their latest compilation: the packages of the workspace
-folders are compiled whole, sources and tests, once the server is idle after the initialization
-and after each save, and a checked document replaces the declarations of its file. A query matches
+folders are compiled whole, sources and tests, once the server is idle after the initialization,
+and after a save for the ones a document they read changed in since, giving way to any message
+of the client, and a checked document replaces the declarations of its file. A query matches
 the names starting with its first character and holding the others in order.
 
 A document is formatted in its canonical form: its tokens on lines of at most 120 characters,

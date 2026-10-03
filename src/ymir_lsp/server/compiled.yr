@@ -3,6 +3,8 @@
  */
 in compiled;
 
+use ymir_lsp::unit;
+
 use ymirc::parser;
 
 /**
@@ -12,14 +14,18 @@ pub record Compiled {
 
     pub let parser: &Parser;
 
+    // The compilation the document was checked by
+    pub let unit: Unit;
+
     // The text of the document compiled
     pub let text: [c8];
 
     // The change of the open documents it was compiled after
     pub let generation: u64;
 
-    pub self (parser: &Parser, text: [c8], generation: u64)
+    pub self (parser: &Parser, unit: Unit, text: [c8], generation: u64)
         with parser = parser
+        , unit = unit
         , text = text
         , generation = generation
     {}
