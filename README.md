@@ -32,6 +32,11 @@ is checked once the client stopped changing it for 250ms, the unsaved buffers of
 standing in for their files, and its warnings are reported as such, as with `gyllir build`. A
 save checks again the open documents reading a document changed since their latest check.
 
+A hover shows the signature of the entity under the cursor, followed by the documentation comment
+of a symbol, in Markdown when the client renders it: its paragraphs, its tags (`@params:`,
+`@returns:`, `@example:`...) as labelled sections, their `- name: text` items as lists, and its
+code blocks and HTML as they are written.
+
 The workspace symbols are the top-level declarations of the modules compiled, and of the modules
 of the std and of `.deps` they use, as of their latest compilation: the packages of the workspace
 folders are compiled whole, sources and tests, once the server is idle after the initialization,
@@ -67,6 +72,9 @@ A *Gyllir* run configuration runs `gyllir run`, `build` or `test` in a package, 
 the diagnostics of gyc linked to their file. A project rooted at a package gets its configurations
 when first opened (*Run* and *Test*, or *Test* and *Build* for a library), and the gutter of
 `fn main` and of each `__test` runs the package or its tests.
+
+The documentation popup of a symbol, on hover or Ctrl+Q, is the hover of the server, rendered by
+LSP4IJ, its code blocks highlighted with the grammar.
 
 *Go to Class* lists the structs, classes, enums, traits and type `def`s of the workspace symbols
 of the server, and *Go to Symbol* all of them, with the module declaring them. Those of the std

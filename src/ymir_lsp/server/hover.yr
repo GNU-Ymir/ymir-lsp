@@ -1,0 +1,250 @@
+/**
+ * The Markdown of the hover of an entity: its signature as code, followed by
+ * its documentation comment laid out as it is written.
+ */
+in hover;
+
+use ymirc::errors::lsp;
+use ymirc::query;
+
+use std::config::data;
+
+/**
+ * @returns: the `Hover` of the protocol of `h`, whose entity is documented by
+ * the comment `comm`, in Markdown
+ */
+pub fn dump(h: Hover, comm: [c8], encoding: PositionEncoding)-> &Config {
+    let dmut contents = copy Dict();
+    contents["kind"] = copy Str("markdown");
+    contents["value"] = copy Str(markdown(h.text, comm));
+
+    let dmut res = copy Dict();
+    res["contents"] = contents;
+    res["range"] = lsp::JsonExporting::dumpRange(Location(h.loc, h.loc, encoding));
+    res
+}
+
+/**
+ * @returns: the hover text `text` of an entity documented by `comm`, its
+ * signature as a code block followed by the Markdown of `comm`
+ */
+fn markdown(text: [c8], comm: [c8])-> [c8] {
+    let doc = trim(comm);
+    let suffix = "\n\n" ~ doc;
+    if (doc == "" || !endsWith(text, suffix)) return "```\n" ~ text ~ "\n```";
+
+    "```\n" ~ text[0us .. text.len - suffix.len] ~ "\n```\n\n" ~ comment(comm)
+}
+
+/**
+ * @returns: the Markdown of the documentation comment `comm`: its paragraphs,
+ * its tags as labelled sections, its `- ` items as lists, and its code blocks
+ * and HTML as they are
+ */
+fn comment(comm: [c8])-> [c8] {
+    let mut res: [[c8]] = [];
+    let mut items: [usize] = [];
+    let mut fenced = false;
+    let mut fence = 0us;
+    for l in dedent(comm) {
+        let ind = indentOf(l);
+        let t = l[ind .. $];
+        if (fenced) {
+            if (startsWith(t, "```")) {
+                res = breakBlock(res ~ ["```"]);
+                fenced = false;
+            } else {
+                res ~= [l[if (ind < fence) { ind } else { fence } .. $]];
+            }
+        } else if (t == "") {
+            res = breakBlock(res);
+        } else if (startsWith(t, "```")) {
+            items = [];
+            res = breakBlock(res) ~ [t];
+            fenced = true;
+            fence = ind;
+        } else if (t[0us] == '@' && nameLen(t[1us .. $]) != 0us) {
+            items = [];
+            res = breakBlock(res) ~ [section(t)];
+        } else if (t[0us] == '<') {
+            items = [];
+            res = breakBlock(breakBlock(res) ~ [t]);
+        } else if (startsWith(t, "- ")) {
+            if (items.len == 0us) res = breakBlock(res);
+            while (items.len != 0us && items[$ - 1us] > ind) { items = items[0us .. $ - 1us]; }
+            if (items.len == 0us || items[$ - 1us] < ind) items ~= [ind];
+            res ~= [pad(items.len - 1us) ~ "- " ~ item(trim(t[2us .. $]))];
+        } else if (items.len != 0us && ind > items[0us]) {
+            let mut depth = 0us;
+            while (depth < items.len && items[depth] < ind) { depth += 1us; }
+            res ~= [pad(depth) ~ t];
+        } else {
+            if (items.len != 0us) res = breakBlock(res);
+            items = [];
+            res ~= [t];
+        }
+    }
+
+    if (fenced) res ~= ["```"];
+    while (res.len != 0us && res[$ - 1us] == "") { res = res[0us .. $ - 1us]; }
+
+    let mut txt = "";
+    for i, r in res {
+        if (i != 0us) txt = txt ~ "\n";
+        txt = txt ~ r;
+    }
+
+    txt
+}
+
+/**
+ * @returns: the lines of `comm`, without the indentation they all share, the
+ * first one aside
+ */
+fn dedent(comm: [c8])-> [[c8]] {
+    let mut lines: [[c8]] = [];
+    let mut start = 0us;
+    for i in 0us .. comm.len + 1us {
+        if (i == comm.len || comm[i] == '\n') {
+            let end = if (i > start && comm[i - 1us] == '\r') { i - 1us } else { i };
+            lines ~= [comm[start .. end]];
+            start = i + 1us;
+        }
+    }
+
+    let mut shared = 0us;
+    let mut found = false;
+    for i in 1us .. lines.len {
+        let ind = indentOf(lines[i]);
+        if (ind != lines[i].len && (!found || ind < shared)) {
+            shared = ind;
+            found = true;
+        }
+    }
+
+    let mut res: [[c8]] = [];
+    for l in lines {
+        let ind = indentOf(l);
+        res ~= [l[if (ind < shared) { ind } else { shared } .. $]];
+    }
+
+    res
+}
+
+/**
+ * @returns: the bold label of the tag starting `t`, followed by the text of its line
+ */
+fn section(t: [c8])-> [c8] {
+    let name = t[1us .. 1us + nameLen(t[1us .. $])];
+    let mut rest = t[1us + name.len .. $];
+    if (rest.len != 0us && rest[0us] == ':') rest = rest[1us .. $];
+    rest = trim(rest);
+
+    let head = "**" ~ label(name) ~ ":**";
+    if (rest == "") return head;
+    head ~ " " ~ rest
+}
+
+/**
+ * @returns: the title of the section of the tag `name`
+ */
+fn label(name: [c8])-> [c8] {
+    match lower(name) {
+        "param"     => { return "Parameters"; }
+        "params"    => { return "Parameters"; }
+        "template"  => { return "Template parameters"; }
+        "templates" => { return "Template parameters"; }
+        "return"    => { return "Returns"; }
+        "returns"   => { return "Returns"; }
+        "cteassert" => { return "Compile-time assertion"; }
+        "assume"    => { return "Assumes"; }
+    }
+
+    let mut res = lower(name);
+    if (name == upper(name)) res = name;
+    else if (name[0us] >= 'a' && name[0us] <= 'z') res = [cast!c8(cast!u8(name[0us]) - 32u8)] ~ res[1us .. $];
+    else res = name[0us .. 1us] ~ res[1us .. $];
+    res
+}
+
+/**
+ * @returns: the list item `t`, the name of its `name: text` form as code
+ */
+fn item(t: [c8])-> [c8] {
+    for i, c in t {
+        if (c == ' ' || c == '`') return t;
+        if (c == ':' && i != 0us && (i + 1us == t.len || t[i + 1us] == ' ')) {
+            return "`" ~ t[0us .. i] ~ "`" ~ t[i .. $];
+        }
+    }
+
+    t
+}
+
+/**
+ * @returns: `res` ending with an empty line, unless it is empty
+ */
+fn breakBlock(res: [[c8]])-> [[c8]] {
+    if (res.len == 0us || res[$ - 1us] == "") return res;
+    res ~ [""]
+}
+
+/**
+ * @returns: the indentation of a list item nested `depth` times
+ */
+fn pad(depth: usize)-> [c8] {
+    let mut res = "";
+    for _ in 0us .. depth {
+        res = res ~ "  ";
+    }
+
+    res
+}
+
+/**
+ * @returns: the number of spaces starting `l`
+ */
+fn indentOf(l: [c8])-> usize {
+    let mut i = 0us;
+    while (i < l.len && l[i] == ' ') { i += 1us; }
+    i
+}
+
+/**
+ * @returns: the length of the name of letters, digits and `_` starting `t`
+ */
+fn nameLen(t: [c8])-> usize {
+    let mut i = 0us;
+    while (i < t.len && ((t[i] >= 'a' && t[i] <= 'z') || (t[i] >= 'A' && t[i] <= 'Z') || (t[i] >= '0' && t[i] <= '9') || t[i] == '_')) {
+        i += 1us;
+    }
+
+    i
+}
+
+fn lower(t: [c8])-> [c8] {
+    copy [if (c >= 'A' && c <= 'Z') { cast!c8(cast!u8(c) + 32u8) } else { c } for c in t]
+}
+
+fn upper(t: [c8])-> [c8] {
+    copy [if (c >= 'a' && c <= 'z') { cast!c8(cast!u8(c) - 32u8) } else { c } for c in t]
+}
+
+fn startsWith(t: [c8], prefix: [c8])-> bool {
+    t.len >= prefix.len && t[0us .. prefix.len] == prefix
+}
+
+fn endsWith(t: [c8], suffix: [c8])-> bool {
+    t.len >= suffix.len && t[t.len - suffix.len .. $] == suffix
+}
+
+/**
+ * @returns: `txt` without its leading and trailing blanks
+ */
+fn trim(txt: [c8])-> [c8] {
+    let mut begin = 0us;
+    let mut end = txt.len;
+    while (begin < end && (txt[begin] == ' ' || txt[begin] == '\n' || txt[begin] == '\t' || txt[begin] == '\r')) { begin += 1us; }
+    while (end > begin && (txt[end - 1us] == ' ' || txt[end - 1us] == '\n' || txt[end - 1us] == '\t' || txt[end - 1us] == '\r')) { end -= 1us; }
+    txt[begin .. end]
+}

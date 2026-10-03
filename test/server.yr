@@ -6,6 +6,7 @@ use ymir_lsp::{document, server, transport};
 
 use std::env;
 use std::config::{access, data};
+use std::fs::{errors, sys};
 
 /**
  * @returns: the messages the server sent when given `input`, then `then` once
@@ -109,6 +110,27 @@ __test a_session_answers_from_the_compilation_of_the_document {
     assert(published[0].len == 1us && published[0][0].str("code") ?? "" == "E4095");
     assert(published[1].len == 1us && published[1][0].str("code") ?? "" == "E4038");
     assert(published[1][0].int("severity") ?? 0i64 == 2i64);
+}
+
+__test a_hover_is_in_markdown_when_the_client_renders_it {
+    let dir = env::currentDir().push("test_resources/server");
+    let uri = Document::ofPath(dir.push("hover.yr").toStr());
+    let text = sys::readFile(dir.push("hover.yr"));
+    let open = notification("textDocument/didOpen", "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(uri)) ~ ",\"languageId\":\"ymir\",\"version\":1,\"text\":" ~ std::config::json::dump(copy Str(text)) ~ "}}");
+    let hover = request(2i64, "textDocument/hover", at("{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(uri)) ~ "}}", 40, 5));
+    let end = request(3i64, "shutdown", "null") ~ notification("exit", "null");
+
+    let markdown = "{\"capabilities\":{\"textDocument\":{\"hover\":{\"contentFormat\":[\"markdown\",\"plaintext\"]}}}}";
+    let (msgs, _) = session(request(1i64, "initialize", markdown) ~ notification("initialized", "{}") ~ open ~ hover ~ end);
+    let contents = response(msgs, 2i64).at("result", "contents");
+    assert(contents.str("kind") ?? "" == "markdown");
+    assert(contents.str("value") ?? "" == sys::readFile(dir.push("hover.md")));
+
+    let (plain, _) = session(request(1i64, "initialize", "{\"capabilities\":{}}") ~ notification("initialized", "{}") ~ open ~ hover ~ end);
+    let value = response(plain, 2i64).str("result", "contents", "value") ?? "";
+    assert(response(plain, 2i64).str("result", "contents", "kind") ?? "" == "plaintext");
+    let signature = "hover::append (a: u32, base: usize, mut ref res: mut [mut c8])-> usize\n\nAppend";
+    assert(value.len > signature.len && value[0us .. signature.len] == signature);
 }
 
 __test a_session_ended_without_a_shutdown_fails {
