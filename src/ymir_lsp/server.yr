@@ -10,6 +10,7 @@ mod ::code;
 mod ::compiled;
 mod ::error;
 mod ::formatting;
+mod ::hover;
 mod ::symbols;
 mod ::utils;
 
@@ -88,6 +89,9 @@ pub class Server {
     let dmut _changes: [[c8] => (u64, bool)] = copy [];
 
     let mut _encoding: PositionEncoding = PositionEncoding::UTF16;
+
+    // Whether the client renders the hovers in Markdown
+    let mut _markdown: bool = false;
 
     let mut _initialized: bool = false;
 
@@ -277,6 +281,12 @@ pub class Server {
             }
         }
 
+        for e in params.elements("capabilities", "textDocument", "hover", "contentFormat") {
+            if let Str(value-> v) = e {
+                if (v == "markdown") self._markdown = true;
+            }
+        }
+
         for f in params.elements("workspaceFolders") {
             if let Ok(p) = Document::toPath(f.str("uri") ?? "") {
                 self._folders ~= [Path(p)];
@@ -336,7 +346,10 @@ pub class Server {
         throws RpcError
     {
         let (doc, c, line, col) = self:.position(params);
-        if let Ok(h) = HoverQuery::at(c.parser.getIndex(), doc.path, line, col) {
+        let index = c.parser.getIndex();
+        if let Ok(occ) = index.at(doc.path, line, col) {
+            let h = Hover(occ.loc, HoverQuery::describe(index, occ));
+            if (self._markdown) return hover::dump(h, occ.symbol.comm, self._encoding);
             return QueryExporting::dump(h, self._encoding);
         }
 
