@@ -74,7 +74,8 @@ cd intellij
 It runs in IntelliJ-based IDEs from 2026.1, and depends on
 [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij), which starts `ymir-lsp` for the
 `.yr` files and maps its features onto the IDE, and on the bundled TextMate plugin, which
-highlights them with the grammar of `intellij/textmate/ymir`. The command starting the server is
+highlights them with the grammar of `intellij/textmate/ymir`, `self` and `super` in a color of
+their own, set under *Settings > Editor > Color Scheme > Ymir*. The command starting the server is
 `ymir-lsp` from the PATH by default, and set under *Settings > Languages & Frameworks > Ymir*.
 In IntelliJ IDEA, *File > New > Project… > Ymir* creates a gyllir package, an executable or a
 library, as `gyllir init` lays it out.
