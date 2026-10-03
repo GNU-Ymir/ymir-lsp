@@ -94,3 +94,18 @@ __test a_file_out_of_a_package_is_compiled_alone {
 
     remove(pkg);
 }
+
+__test a_package_is_compiled_whole_with_its_tests {
+    let pkg = package();
+    let units = Unit::ofPackage(pkg);
+    assert(paths(copy [u.root for u in units]) == [pkg.push("src/main.yr").toStr(), pkg.push("test/__test__.yr").toStr()]);
+    for u in units {
+        assert(u.module.isEmpty() && u.versions == ["Feature"]);
+        assert(u.prefix.toStr() == pkg.push(".deps/std/.iprefix").toStr());
+    }
+
+    assert(units[1].includes.len == units[0].includes.len + 1us);
+    assert(units[0].key() != Unit::compiling(pkg.push("src/main.yr")).key());
+    assert(Unit::ofPackage(pkg.push("src")).len == 0us);
+    remove(pkg);
+}
