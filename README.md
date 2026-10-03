@@ -37,6 +37,12 @@ of a symbol, in Markdown when the client renders it: its paragraphs, its tags (`
 `@returns:`, `@example:`...) as labelled sections, their `- name: text` items as lists, and its
 code blocks and HTML as they are written.
 
+A diagnostic carries its quick fixes: the edits ymirc proposes, preceded by the ones of the
+server. An undefined symbol is fixed by the `use` of each module declaring it publicly, among the
+modules of the workspace symbols, a `use` resolving no symbol by its removal, and a local variable
+written to while immutable by its `mut`, or its `dmut` when a part of it is written to. The `use`
+declarations are rewritten in their canonical form, as the formatting writes them.
+
 The workspace symbols are the top-level declarations of the modules compiled, and of the modules
 of the std and of `.deps` they use, as of their latest compilation: the packages of the workspace
 folders are compiled whole, sources and tests, once the server is idle after the initialization,
@@ -75,6 +81,8 @@ when first opened (*Run* and *Test*, or *Test* and *Build* for a library), and t
 
 The documentation popup of a symbol, on hover or Ctrl+Q, is the hover of the server, rendered by
 LSP4IJ, its code blocks highlighted with the grammar.
+
+Alt+Enter on a diagnostic lists its quick fixes, along with the generic actions of the IDE.
 
 *Go to Class* lists the structs, classes, enums, traits and type `def`s of the workspace symbols
 of the server, and *Go to Symbol* all of them, with the module declaring them. Those of the std
