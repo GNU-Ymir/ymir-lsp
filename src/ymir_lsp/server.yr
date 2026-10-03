@@ -70,6 +70,10 @@ pub class Server {
     // to be read again, by `Unit::key`
     let dmut _unindexed: [[c8] => Unit] = copy [];
 
+    // The change the declarations of the packages of the folders were last
+    // read after, by `Unit::key`
+    let dmut _indexed: [[c8] => u64] = copy [];
+
     // The session of the compilation in progress, cancelled by a change
     let dmut _compiling: (&Session)? = none;
 
@@ -549,18 +553,22 @@ pub class Server {
             if let Ok(u) = self._unindexed[key] {
                 if let Ok(_) = self:.compile(u, index-> false) {
                     self._unindexed:.remove(key);
+                    self._indexed[key] = self._generation;
                 }
             }
         }
     }
 
     /**
-     * Read again the declarations of the packages of the workspace folders
+     * Read again the declarations of the packages of the workspace folders,
+     * the ones a document they read changed in since they were last read
      */
     fn reindex(mut self) {
         for dir in self._folders {
             for u in Unit::ofPackage(dir) {
-                self._unindexed[u.key()] = u;
+                let key = u.key();
+                if let Ok(g) = self._indexed[key] && (!self.changedSince(u, g)) continue;
+                self._unindexed[key] = u;
             }
         }
     }
