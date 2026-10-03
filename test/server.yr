@@ -368,3 +368,43 @@ __test the_diagnostics_carry_the_quick_fixes_of_the_server {
         assert(published(after, d._0) != 0us && latest(after, d._0).len == 0us, d._0);
     }
 }
+
+__test a_session_finds_the_usages_of_a_symbol_in_the_packages_of_the_workspace {
+    let pkg = env::currentDir().push("test_resources/server/pkg");
+    let shapes = Document::ofPath(pkg.push("src/shapes.yr").toStr());
+    let main = Document::ofPath(pkg.push("src/main.yr").toStr());
+    let doc = "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(shapes)) ~ "}}";
+    let square = at(doc, 6, 12);
+
+    let input = request(1i64, "initialize", "{\"rootUri\":" ~ std::config::json::dump(copy Str(Document::ofPath(pkg.toStr()))) ~ ",\"capabilities\":{}}")
+        ~ notification("initialized", "{}")
+        ~ notification("textDocument/didOpen", "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(shapes)) ~ ",\"languageId\":\"ymir\",\"version\":1,\"text\":" ~ std::config::json::dump(copy Str(sys::readFile(pkg.push("src/shapes.yr")))) ~ "}}")
+        ~ request(2i64, "textDocument/references", square[0us .. $ - 1us] ~ ",\"context\":{\"includeDeclaration\":true}}")
+        ~ request(3i64, "textDocument/references", square[0us .. $ - 1us] ~ ",\"context\":{\"includeDeclaration\":false}}")
+        ~ request(4i64, "textDocument/documentHighlight", square)
+        ~ request(5i64, "shutdown", "null")
+        ~ notification("exit", "null");
+
+    let (msgs, code) = session(input);
+    assert(code == 0);
+    assert(response(msgs, 1i64).boolean("result", "capabilities", "documentHighlightProvider") ?? false);
+
+    // the usages in the modules the document does not read, a token once
+    let all = response(msgs, 2i64).elements("result");
+    let mut inMain = 0us;
+    let mut decl = 0us;
+    for r in all {
+        if (r.str("uri") ?? "" == main) inMain += 1us;
+        if (r.str("uri") ?? "" == shapes && r.int("range", "start", "line") ?? 0i64 == 6i64) decl += 1us;
+    }
+
+    assert(all.len == 7us && inMain == 1us && decl == 1us);
+    assert(response(msgs, 3i64).elements("result").len == 6us);
+
+    // the highlights are the usages in the document
+    let highlights = response(msgs, 4i64).elements("result");
+    assert(highlights.len == 6us);
+    for h in highlights {
+        assert(h.str("uri") ?? "" == "" && h.int("range", "start", "line") ?? -1i64 >= 6i64);
+    }
+}
