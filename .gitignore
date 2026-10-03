@@ -22,3 +22,6 @@ __doc/
 /intellij/.intellijPlatform/
 /intellij/.kotlin/
 /intellij/build/
+
+# Compiled by gdb loading the gdb script of the IntelliJ plugin
+__pycache__/

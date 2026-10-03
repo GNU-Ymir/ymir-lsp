@@ -2,6 +2,8 @@ package org.gnu.ymir.intellij.run
 
 import com.intellij.codeInsight.daemon.LineMarkerInfo
 import com.intellij.execution.RunManager
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -30,6 +32,15 @@ class GyllirRunTest : BasePlatformTestCase() {
 
         val document = PsiDocumentManager.getInstance(project).getDocument(file)!!
         assertEquals(listOf(2, 6), markers.map { document.getLineNumber(it.startOffset) })
+
+        val actions = markers.map { marker ->
+            (marker.createGutterRenderer()!!.popupMenuActions as DefaultActionGroup).getChildren(ActionManager.getInstance())
+                .map { it.templatePresentation.text }
+        }
+        assertEquals(
+            listOf(listOf("Run 'gyllir run'", "Debug 'gyllir run'"), listOf("Run 'gyllir test'", "Debug 'gyllir test'")),
+            actions,
+        )
     }
 
     fun testNoMarkerOutsideAPackage() {

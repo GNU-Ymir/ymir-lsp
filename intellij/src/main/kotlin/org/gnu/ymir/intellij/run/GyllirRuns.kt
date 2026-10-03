@@ -1,5 +1,6 @@
 package org.gnu.ymir.intellij.run
 
+import com.intellij.execution.Executor
 import com.intellij.execution.ProgramRunnerUtil
 import com.intellij.execution.RunManager
 import com.intellij.execution.RunnerAndConfigurationSettings
@@ -36,11 +37,11 @@ object GyllirRuns {
         return settings
     }
 
-    /** Selects the configuration running `command` on `dir`, and runs it. */
-    fun run(project: Project, dir: Path, command: GyllirCommand) {
+    /** Selects the configuration running `command` on `dir`, and runs it with `executor`, or debugs it. */
+    fun run(project: Project, dir: Path, command: GyllirCommand, executor: Executor = DefaultRunExecutor.getRunExecutorInstance()) {
         val settings = settingsFor(project, dir, command)
         RunManager.getInstance(project).selectedConfiguration = settings
-        ProgramRunnerUtil.executeConfiguration(settings, DefaultRunExecutor.getRunExecutorInstance())
+        ProgramRunnerUtil.executeConfiguration(settings, executor)
     }
 
     fun matches(settings: RunnerAndConfigurationSettings, dir: Path, command: GyllirCommand): Boolean {

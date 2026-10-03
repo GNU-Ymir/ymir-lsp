@@ -17,6 +17,7 @@ class YmirSettings : SimplePersistentStateComponent<YmirSettings.Options>(Option
     class Options : BaseState() {
         var serverPath by string(DEFAULT_SERVER)
         var gyllirPath by string(DEFAULT_GYLLIR)
+        var gdbPath by string(DEFAULT_GDB)
     }
 
     /** The command starting the language server, a path or a name looked up in the PATH. */
@@ -33,9 +34,17 @@ class YmirSettings : SimplePersistentStateComponent<YmirSettings.Options>(Option
             state.gyllirPath = value.trim().ifEmpty { DEFAULT_GYLLIR }
         }
 
+    /** The command of gdb, debugging the programs of the gyllir run configurations. */
+    var gdbPath: String
+        get() = state.gdbPath?.takeIf { it.isNotBlank() } ?: DEFAULT_GDB
+        set(value) {
+            state.gdbPath = value.trim().ifEmpty { DEFAULT_GDB }
+        }
+
     companion object {
         const val DEFAULT_SERVER = "ymir-lsp"
         const val DEFAULT_GYLLIR = "gyllir"
+        const val DEFAULT_GDB = "gdb"
 
         fun getInstance(): YmirSettings = service()
     }
