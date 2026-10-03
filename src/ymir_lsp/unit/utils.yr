@@ -16,10 +16,10 @@ pub fn inPackage(dir: Path, cfg: &Config, file: Path)-> (Unit)? {
     let versions = versions(cfg);
     let prefix = Unit::stdPrefix(dir, cfg);
 
-    let testDir = dir.push(cfg.str("test-dir") ?? "test");
+    let testRoot = testRoot(dir, cfg);
+    let testDir = testRoot.parent();
     if (testDir.isPrefix(file)) {
-        let root = testDir.push((cfg.str("test-root") ?? "__test__") ~ ".yr");
-        return Unit(root, module-> file.removePrefix(testDir).stripExtension(), includes-> deps ~ [srcRoot], versions-> versions, prefix-> prefix)?;
+        return Unit(testRoot, module-> file.removePrefix(testDir).stripExtension(), includes-> deps ~ [srcRoot], versions-> versions, prefix-> prefix)?;
     }
 
     let srcDir = srcRoot.parent();
@@ -28,6 +28,30 @@ pub fn inPackage(dir: Path, cfg: &Config, file: Path)-> (Unit)? {
     }
 
     none
+}
+
+/**
+ * @returns: the compilations of the whole package `dir` configured by `cfg`,
+ * of its sources and of its tests, the ones whose root file exists
+ */
+pub fn wholePackage(dir: Path, cfg: &Config)-> [Unit] {
+    let srcRoot = Unit::sourceRoot(dir, cfg);
+    let testRoot = testRoot(dir, cfg);
+    let deps = dependencies(dir, dir, cfg, []);
+    let versions = versions(cfg);
+    let prefix = Unit::stdPrefix(dir, cfg);
+
+    let mut res: [Unit] = [];
+    if (sys::isFile(srcRoot)) res ~= [Unit(srcRoot, includes-> deps, versions-> versions, prefix-> prefix)];
+    if (sys::isFile(testRoot)) res ~= [Unit(testRoot, includes-> deps ~ [srcRoot], versions-> versions, prefix-> prefix)];
+    res
+}
+
+/**
+ * @returns: the root file of the tests of the package `dir` configured by `cfg`
+ */
+fn testRoot(dir: Path, cfg: &Config)-> Path {
+    dir.push(cfg.str("test-dir") ?? "test").push((cfg.str("test-root") ?? "__test__") ~ ".yr")
 }
 
 /**
