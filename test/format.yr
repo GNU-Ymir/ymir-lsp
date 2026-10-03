@@ -5,7 +5,7 @@ use ymir_lsp::format;
 use std::env;
 use std::fs::{errors, sys};
 
-def CASES = ["alignment", "binary", "comments", "conditions", "declarations", "lists", "spacing", "strings", "uses"];
+def CASES = ["alignment", "binary", "chains", "comments", "conditions", "declarations", "lists", "spacing", "strings", "uses"];
 
 /**
  * @returns: the source of the case `name` of the resources, and its canonical form

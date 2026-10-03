@@ -1,0 +1,21 @@
+in chains;
+
+fn main() {
+    let parser = (copy ArgumentParser())
+        :.flag("stdio", comments-> "talk to the client on the standard input and output (default)")
+        :.option!{[c8]} ("listen", comments-> "wait for the client to connect on PORT")
+        :.option!{[c8]} ("socket", short-> "port", comments-> "connect to the client listening on PORT")
+        :.option!{[c8]} ("host", default-> "127.0.0.1", comments-> "the address of --listen and --socket")
+        :.flag("version", comments-> "print the version and exit")
+        :.defaultHelp();
+
+    let short = parser:.flag("a"):.flag("b");
+
+    self._output
+        :.write(self._line.content.trimmed(), self._kept)
+        :.write(self._next.content.trimmed()).len
+        :.writeLine(self._src.text);
+    self._b:.add(Doc::concat(copy [open, Doc::align(Doc::concat(body)), close, Doc::mk(DocKind::SOFT), self.first(e)]));
+    foo(firstArgument,
+        (copy Builder()):.add(Doc::text("first")):.add(Doc::text("second")):.add(Doc::text("third")):.finish());
+}
