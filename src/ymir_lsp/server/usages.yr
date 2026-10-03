@@ -1,0 +1,46 @@
+/**
+ * The usages of an entity, gathered from the semantic indexes of several
+ * compilations, the tokens of the entity matched by its declaration.
+ */
+in usages;
+
+use ymirc::errors::lsp;
+use ymirc::lexing::word;
+use ymirc::semantic::index;
+
+use std::config::data;
+
+/**
+ * @returns: the tokens of the indexes `indexes` naming the entity `occ` names,
+ * a token once, the declaration excluded unless `withDeclaration`
+ */
+pub fn references(occ: Occurrence, indexes: [&SemanticIndex], withDeclaration: bool)-> [&Word] {
+    let dmut seen: [[c8] => ()] = copy [];
+    let mut res: [&Word] = [];
+    for idx in indexes {
+        for o in idx.referencesOf(occ) if withDeclaration || o.kind == OccurrenceKind::REFERENCE {
+            let key = o.loc.filename ~ ":" ~ std::conv::to!{[c8]} (o.loc.seek);
+            if (key !in seen) {
+                seen[key] = ();
+                res ~= [o.loc];
+            }
+        }
+    }
+
+    res
+}
+
+/**
+ * @returns: the `DocumentHighlight`s of the tokens of the index `idx` in the
+ * file `path` naming the entity `occ` names
+ */
+pub fn highlights(occ: Occurrence, idx: &SemanticIndex, path: [c8], encoding: PositionEncoding)-> &Config {
+    let dmut res = copy Array();
+    for l in references(occ, copy [idx], withDeclaration-> true) if l.filename == path {
+        let dmut h = copy Dict();
+        h["range"] = lsp::JsonExporting::dumpRange(Location(l, l, encoding));
+        res:.push(h);
+    }
+
+    res
+}
