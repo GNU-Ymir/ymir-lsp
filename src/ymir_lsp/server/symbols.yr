@@ -27,11 +27,14 @@ pub record WorkspaceSymbol {
     // The token naming the declaration
     pub let loc: &Word;
 
-    pub self (name: [c8], kind: SymbolKind, container: [c8], loc: &Word)
+    pub let isPublic: bool;
+
+    pub self (name: [c8], kind: SymbolKind, container: [c8], loc: &Word, isPublic: bool)
         with name = name
         , kind = kind
         , container = container
         , loc = loc
+        , isPublic = isPublic
     {}
 }
 
@@ -95,6 +98,31 @@ pub class SymbolTable {
         }
 
         out
+    }
+
+    /**
+     * @returns: the paths of the modules of the files other than `except`
+     * declaring a public `name`, the ones of the files of `project` first,
+     * each once
+     */
+    pub fn exporting(self, name: [c8], project: [Path], except: [c8])-> [[c8]] {
+        use std::algorithm::sorting;
+
+        let dmut seen: [[c8] => ()] = copy [];
+        let mut res: [(bool, [c8])] = [];
+        for f, syms in self._files if f != except {
+            for s in syms if s.isPublic && s.name == name && s.container != "" && s.container !in seen {
+                seen[s.container] = ();
+                res ~= [(isInProject(f, project), s.container)];
+            }
+        }
+
+        let sorted = sort(copy res, |a, b| => {
+            if (a._0 != b._0) return a._0;
+            a._1 < b._1
+        });
+
+        copy [e._1 for e in sorted]
     }
 }
 
@@ -195,7 +223,7 @@ fn collect(sym: &Symbol, dmut seen: [[c8] => ()], dmut files: [[c8] => [Workspac
         if (s.loc.isEof || s.loc.filename == "") continue;
         if let Ok(_) = s.templateSource continue;
         if let Ok(kind) = kindOf(s) {
-            let decl = WorkspaceSymbol(s.loc.str, kind, container, s.loc);
+            let decl = WorkspaceSymbol(s.loc.str, kind, container, s.loc, s.protection == Protection::PUBLIC);
             files[s.loc.filename] = (files[s.loc.filename] ?? []) ~ [decl];
         }
     }
