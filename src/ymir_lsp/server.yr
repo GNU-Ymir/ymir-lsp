@@ -77,6 +77,9 @@ pub class Server {
     // The session of the compilation in progress, cancelled by a change
     let dmut _compiling: (&Session)? = none;
 
+    // Whether the compilation in progress only reads declarations, cancelled by any message
+    let mut _background: bool = false;
+
     // Moved forward by every change of an open document
     let mut _generation: u64 = 0u64;
 
@@ -130,12 +133,8 @@ pub class Server {
         loop {
             if let Ok(body) = self._channel:.receive() {
                 let msg = if let Ok(m) = std::config::json::parse(body)? { m } else { copy Dict() };
-                if let Ok(method) = msg.str("method") {
-                    if (method == "textDocument/didChange" || method == "textDocument/didClose" || method == "exit") {
-                        self:.cancelCompilation();
-                    }
-                }
-
+                let method = msg.str("method") ?? "";
+                self:.cancelCompilation(always-> method == "textDocument/didChange" || method == "textDocument/didClose" || method == "exit");
                 self:.post(msg);
             } else {
                 self:.post(copy data::None());
@@ -149,9 +148,12 @@ pub class Server {
         self._received:.post();
     }
 
-    fn cancelCompilation(mut self) {
+    /**
+     * Cancel the compilation in progress if it only reads declarations, or if `always`
+     */
+    fn cancelCompilation(mut self, always: bool) {
         atomic self {
-            if let Ok(dmut s) = alias self._compiling {
+            if let Ok(dmut s) = alias self._compiling && (always || self._background) {
                 s:.cancel();
             }
         }
@@ -626,6 +628,7 @@ pub class Server {
         let dmut p = copy Parser::inSession(alias session, unit.root.toStr(), overlay-> overlay, index-> index);
         atomic self {
             self._compiling = (alias session)?;
+            self._background = !index;
         }
 
         let mut thrown: [&ErrorMsg] = [];
