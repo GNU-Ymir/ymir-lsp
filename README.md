@@ -80,6 +80,11 @@ It runs in IntelliJ-based IDEs from 2026.1, and depends on
 highlights them with the grammar of `intellij/textmate/ymir`, `self` and `super` in a color of
 their own, set under *Settings > Editor > Color Scheme > Ymir*. The command starting the server is
 `ymir-lsp` from the PATH by default, and set under *Settings > Languages & Frameworks > Ymir*.
+It runs under a memory budget set there, 2048 MiB by default and `0` for none: in a systemd user
+scope killing it past the budget without letting it swap (`systemd-run --user --scope -p
+MemoryMax=<budget>M -p MemorySwapMax=0`), or else with the heap of its GC capped by
+`GC_MAXIMUM_HEAP_SIZE`. A server stopped on its budget is not restarted, and a notification
+offers to raise the budget or to restart it.
 In IntelliJ IDEA, *File > New > Project… > Ymir* creates a gyllir package, an executable or a
 library, as `gyllir init` lays it out.
 
