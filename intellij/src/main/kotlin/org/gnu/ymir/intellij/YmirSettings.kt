@@ -18,6 +18,7 @@ class YmirSettings : SimplePersistentStateComponent<YmirSettings.Options>(Option
         var serverPath by string(DEFAULT_SERVER)
         var gyllirPath by string(DEFAULT_GYLLIR)
         var gdbPath by string(DEFAULT_GDB)
+        var memoryBudget by property(DEFAULT_MEMORY_BUDGET)
     }
 
     /** The command starting the language server, a path or a name looked up in the PATH. */
@@ -41,10 +42,18 @@ class YmirSettings : SimplePersistentStateComponent<YmirSettings.Options>(Option
             state.gdbPath = value.trim().ifEmpty { DEFAULT_GDB }
         }
 
+    /** The memory the language server may use, in MiB, `0` for no limit. */
+    var memoryBudget: Int
+        get() = state.memoryBudget.coerceAtLeast(0)
+        set(value) {
+            state.memoryBudget = value.coerceAtLeast(0)
+        }
+
     companion object {
         const val DEFAULT_SERVER = "ymir-lsp"
         const val DEFAULT_GYLLIR = "gyllir"
         const val DEFAULT_GDB = "gdb"
+        const val DEFAULT_MEMORY_BUDGET = 2048
 
         fun getInstance(): YmirSettings = service()
     }

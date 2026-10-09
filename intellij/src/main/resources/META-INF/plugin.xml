@@ -15,6 +15,7 @@
     <depends>com.redhat.devtools.lsp4ij</depends>
 
     <extensions defaultExtensionNs="com.intellij">
+        <notificationGroup id="Ymir" displayType="BALLOON"/>
         <applicationConfigurable parentId="language"
                                  instance="org.gnu.ymir.intellij.YmirConfigurable"
                                  id="org.gnu.ymir.intellij.YmirConfigurable"
