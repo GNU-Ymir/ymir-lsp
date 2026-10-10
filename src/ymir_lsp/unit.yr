@@ -47,10 +47,10 @@ pub record Unit {
     {}
 
     /**
-     * @returns: the identity of the compilation, the same for the files of a module
+     * @returns: the identity of the compilation, the same for the modules of a target
      */
     pub fn key(self)-> [c8] {
-        self.root.toStr() ~ "#" ~ self.module.toStr()
+        self.root.toStr()
     }
 
     /**
