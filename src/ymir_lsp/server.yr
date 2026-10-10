@@ -1,8 +1,9 @@
 /**
  * The language server: a thread queues the messages of the client, the main one
- * answers them from the compilation of the open documents, and checks a changed
- * one once no message came for `DEBOUNCE` milliseconds, until the next change,
- * the packages of the workspace being compiled then for their declarations.
+ * answers them from the compilations of the targets of the open documents, and
+ * checks the target of a changed one once no message came for `DEBOUNCE`
+ * milliseconds, until the next change, the packages of the workspace being
+ * compiled then for their declarations.
  */
 in server;
 
@@ -34,6 +35,8 @@ pub def VERSION = "0.1.0";
 
 pub def DEBOUNCE = 250u64;
 
+pub def COMPILED_DOCUMENTS = 5us;
+
 pub def Compiled: compiled::Compiled;
 pub def RpcCode: code::RpcCode;
 pub def Lines: formatting::Lines;
@@ -54,13 +57,19 @@ pub class Server {
     // The open documents, by URI
     let dmut _docs: [[c8] => Document] = copy [];
 
-    // The latest compilation of the open documents, by URI
+    // The latest compilation of the targets of the open documents, by `Unit::key`
     let dmut _compiled: [[c8] => Compiled] = copy [];
+
+    // The URIs of the open documents compiled, the most recently used last
+    let mut _recent: [[c8]] = [];
+
+    // The number of open documents compiled at most, all of them if 0
+    let mut _capacity: usize = COMPILED_DOCUMENTS;
 
     // The documents whose diagnostics are to be published again
     let dmut _dirty: [[c8] => ()] = copy [];
 
-    // The sessions of the compilations, by `Unit::key`
+    // The sessions of the targets, by `Unit::key`, shared by their open documents and their index
     let dmut _sessions: [[c8] => &Session] = copy [];
 
     // The declarations of the modules compiled
@@ -283,6 +292,10 @@ pub class Server {
             }
         }
 
+        if let Ok(n) = params.int("initializationOptions", "compiledDocuments") && n >= 0i64 {
+            self._capacity = cast!usize(n);
+        }
+
         for e in params.elements("capabilities", "textDocument", "hover", "contentFormat") {
             if let Str(value-> v) = e {
                 if (v == "markdown") self._markdown = true;
@@ -415,6 +428,7 @@ pub class Server {
     fn documentSymbol(mut self, params: &Config)-> &Config {
         let uri = self.uriOf(params) ?? "";
         if let Ok(doc) = self._docs[uri] {
+            self:.touch(uri);
             if let Ok(c) = self:.compiled(uri) {
                 return QueryExporting::dump(OutlineQuery::symbols(c.parser.getModuleSymbol(), doc.path), self._encoding);
             }
@@ -427,7 +441,7 @@ pub class Server {
         throws RpcError
     {
         let (doc, c, line, col) = self:.position(params);
-        QueryExporting::dump(CompletionQuery::at(c.parser.getIndex(), c.parser.getModuleSymbol(), doc.path, c.text, line, col))
+        QueryExporting::dump(CompletionQuery::at(c.parser.getIndex(), c.parser.getModuleSymbol(), doc.path, c.textOf(doc.path), line, col))
     }
 
     /**
@@ -505,10 +519,11 @@ pub class Server {
         let line = params.int("position", "line");
         let character = params.int("position", "character");
         if let Ok(doc) = self._docs[uri] {
+            self:.touch(uri);
             if let Ok(c) = self:.compiled(uri) {
                 if let Ok(l) = line {
                     if let Ok(ch) = character {
-                        let (ql, qc) = QueryExporting::fromPosition(c.text, cast!u64(l), cast!u64(ch), self._encoding);
+                        let (ql, qc) = QueryExporting::fromPosition(c.textOf(doc.path), cast!u64(l), cast!u64(ch), self._encoding);
                         return (doc, c, ql, qc);
                     }
                 }
@@ -545,6 +560,31 @@ pub class Server {
         self._docs[doc.uri] = doc;
         self._dirty[doc.uri] = ();
         self:.changed(doc.path);
+        self:.touch(doc.uri);
+    }
+
+    /**
+     * Make the open document `uri`, if it is a file, the most recently used
+     * of the compiled ones, the least recently used beyond `_capacity` being
+     * no longer compiled: they keep the diagnostics of their latest check
+     */
+    fn touch(mut self, uri: [c8]) {
+        if let Ok(d) = self._docs[uri] && d.path == "" return;
+
+        let mut recent: [[c8]] = [];
+        for u in self._recent if u != uri {
+            recent ~= [u];
+        }
+
+        recent ~= [uri];
+        let over = if (self._capacity != 0us && recent.len > self._capacity) { recent.len - self._capacity } else { 0us };
+        self._recent = recent[over .. $];
+        for u in recent[0us .. over] {
+            self._dirty:.remove(u);
+            if let Ok(d) = self._docs[u] {
+                self:.release(Unit::compiling(Path(d.path)).key());
+            }
+        }
     }
 
     /**
@@ -572,22 +612,48 @@ pub class Server {
     fn close(mut self, uri: [c8]) {
         if let Ok(doc) = self._docs[uri] {
             self._docs:.remove(uri);
-            self._compiled:.remove(uri);
             self._dirty:.remove(uri);
+            self._recent = copy [u for u in self._recent if u != uri];
             self:.changed(doc.path);
-
-            if (doc.path != "") {
-                let key = Unit::compiling(Path(doc.path)).key();
-                let mut shared = false;
-                for _, d in self._docs {
-                    if (d.path != "" && Unit::compiling(Path(d.path)).key() == key) shared = true;
-                }
-
-                if (!shared) self._sessions:.remove(key);
-            }
-
+            if (doc.path != "") self:.release(Unit::compiling(Path(doc.path)).key());
             self:.publish(uri, copy Array());
         }
+    }
+
+    /**
+     * Drop the compilation of the target `key`, and from its session the
+     * modules of the documents no longer compiled: the session itself once
+     * none of its documents is compiled and the workspace does not index it
+     */
+    fn release(mut self, key: [c8]) {
+        self._compiled:.remove(key);
+        let (docs, modules) = self.opened(key);
+        let indexed = (key in self._indexed) || (key in self._unindexed);
+        if (docs.len == 0us && !indexed) {
+            self._sessions:.remove(key);
+        } else if let Ok(dmut s) = alias self._sessions[key] {
+            s:.enter();
+            state::setPathFilters(modules);
+            s:.exit();
+        }
+    }
+
+    /**
+     * @returns: the compiled open documents of the target `key`, and their modules
+     */
+    fn opened(self, key: [c8])-> ([Document], [Path]) {
+        let mut docs: [Document] = [];
+        let mut modules: [Path] = [];
+        for uri in self._recent {
+            let d = if let Ok(d) = self._docs[uri] { d } else { continue; };
+            let u = Unit::compiling(Path(d.path));
+            if (u.key() == key) {
+                docs ~= [d];
+                if (!u.module.isEmpty()) modules ~= [u.module];
+            }
+        }
+
+        (docs, modules)
     }
 
     /**
@@ -623,40 +689,59 @@ pub class Server {
     }
 
     /**
-     * @returns: the compilation of the open document `uri` after the latest
-     * change of the documents it reads, none if it is not a file, or if its
-     * compilation was cancelled
+     * @returns: the compilation of the target of the open document `uri`,
+     * with the modules of its compiled open documents, after the latest
+     * change of the documents it reads; none if `uri` is not a compiled file,
+     * or if its compilation was cancelled. A new compilation replaces the
+     * previous one, and publishes the diagnostics of each of these documents
      */
     fn compiled(mut self, uri: [c8])-> (Compiled)? {
         let doc = if let Ok(d) = self._docs[uri] { d } else { return none; };
-        if let Ok(c) = self._compiled[uri] && (!self.changedSince(c.unit, c.generation)) {
-            self._dirty:.remove(uri);
-            return c?;
-        }
-
-        if (doc.path == "") {
+        if (doc.path == "" || uri !in self._recent) {
             self._dirty:.remove(uri);
             return none;
         }
 
         let unit = Unit::compiling(Path(doc.path));
-        let (p, thrown) = if let Ok(r) = self:.compile(unit, background-> false) { r } else { return none; };
+        let key = unit.key();
+        if let Ok(c) = self._compiled[key] && (!self.changedSince(c.unit, c.generation)) {
+            self._dirty:.remove(uri);
+            return c?;
+        }
+
+        self._compiled:.remove(key);
+        let (docs, modules) = self.opened(key);
+        let (p, thrown) = if let Ok(r) = self:.compile(unit, modules, background-> false) { r } else { return none; };
 
         let dmut session = self:.sessionOf(unit);
         session:.enter();
         let diags = Flattening::diagnosticsOf(p.getWarnings() ~ thrown, encoding-> self._encoding);
-        let dmut published = copy Array();
-        for d in diags {
-            let fixed = fixes::withFixes(d, doc.path, doc.text, p.getIndex(), self._symbols, self._folders, self._encoding);
-            published:.push(self.inDocument(fixed, doc.path));
+        let paths = copy [d.path for d in docs];
+        let dmut texts: [[c8] => [c8]] = copy [];
+        let mut published: [&Config] = [];
+        for d in docs {
+            texts[d.path] = copy d.text;
+            let dmut ofDoc = copy Array();
+            for diag in diags {
+                if (diag.loc.file == d.path) {
+                    ofDoc:.push(lsp::JsonExporting::dump(fixes::withFixes(diag, d.path, d.text, p.getIndex(), self._symbols, self._folders, self._encoding)));
+                } else if (diag.loc.file !in paths) {
+                    ofDoc:.push(self.inDocument(diag, d.path));
+                }
+            }
+
+            published ~= [ofDoc];
         }
 
         session:.exit();
 
-        let c = Compiled(p, unit, doc.text, self._generation);
-        self._compiled[uri] = c;
-        self._dirty:.remove(uri);
-        self:.publish(uri, published);
+        let c = Compiled(p, unit, texts, self._generation);
+        self._compiled[key] = c;
+        for i in 0us .. docs.len {
+            self._dirty:.remove(docs[i].uri);
+            self:.publish(docs[i].uri, published[i]);
+        }
+
         c?
     }
 
@@ -672,21 +757,24 @@ pub class Server {
             return c?;
         }
 
-        let (p, _) = if let Ok(r) = self:.compile(unit, background-> background) { r } else { return none; };
-        let c = Compiled(p, unit, "", self._generation);
+        let (p, _) = if let Ok(r) = self:.compile(unit, [], background-> background) { r } else { return none; };
+        let c = Compiled(p, unit, copy [], self._generation);
         self._indexed[key] = c;
         self._unindexed:.remove(key);
         c?
     }
 
     /**
-     * @returns: the compilation of `unit`, the open documents standing in for
-     * their files, and the error it threw if any; none if it was cancelled,
-     * by any message if `background`. The declarations of its modules replace
-     * the ones read before
+     * @returns: the compilation of `unit`, of its modules `modules` only when
+     * there are some, the open documents standing in for their files, and the
+     * error it threw if any; none if it was cancelled, by any message if
+     * `background`. The declarations of its modules replace the ones read before
      */
-    fn compile(mut self, unit: Unit, background: bool)-> (&Parser, [&ErrorMsg])? {
+    fn compile(mut self, unit: Unit, modules: [Path], background: bool)-> (&Parser, [&ErrorMsg])? {
         let dmut session = self:.sessionOf(unit);
+        session:.enter();
+        state::setPathFilters(modules);
+        session:.exit();
 
         let dmut overlay: [Path => [c8]] = copy [];
         for _, d in self._docs if d.path != "" {
@@ -721,13 +809,11 @@ pub class Server {
     }
 
     /**
-     * @returns: the diagnostic `d` of the compilation of the document `path`,
-     * as one of it: placed at its start when it is about another file, the
+     * @returns: the diagnostic `d` about a file no open document of the
+     * compilation is, as one of the document `path`: placed at its start, the
      * place it is about being its first related information
      */
     fn inDocument(self, d: LspDiagnostic, path: [c8])-> &Config {
-        if (d.loc.file == path) return lsp::JsonExporting::dump(d);
-
         let start = lsp::Position(0u64, 0u64);
         let mut related = d.related;
         let mut msg = d.msg;
@@ -740,8 +826,9 @@ pub class Server {
     }
 
     /**
-     * @returns: the session of the compilations of `unit`, configured as gyllir
-     * compiles it, with its tests, the warnings reported and not thrown
+     * @returns: the session of the compilations of the target of `unit`,
+     * configured as gyllir compiles it, with its tests, the warnings reported
+     * and not thrown
      */
     fn sessionOf(mut self, unit: Unit)-> dmut &Session {
         let key = unit.key();
@@ -765,7 +852,6 @@ pub class Server {
 
         if (!unit.prefix.isEmpty()) state::setPrefix(unit.prefix.toStr());
         if (unit.standalone) state::activateStandalone();
-        if (!unit.module.isEmpty()) state::insertPathFilter(unit.module);
         s:.exit();
 
         self._sessions[key] = alias s;
