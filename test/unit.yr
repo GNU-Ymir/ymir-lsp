@@ -99,7 +99,7 @@ __test a_source_file_is_a_module_of_its_package {
 
     let m = Unit::compiling(pkg.push("src/main.yr"));
     assert(m.module.toStr() == "main");
-    assert(m.key() != u.key() && m.root.toStr() == u.root.toStr());
+    assert(m.key() == u.key() && m.root.toStr() == u.root.toStr());
     remove(pkg);
 }
 
@@ -135,7 +135,8 @@ __test a_package_is_compiled_whole_with_its_tests {
     }
 
     assert(units[1].includes.len == units[0].includes.len + 1us);
-    assert(units[0].key() != Unit::compiling(pkg.push("src/main.yr")).key());
+    assert(units[0].key() == Unit::compiling(pkg.push("src/main.yr")).key());
+    assert(units[1].key() != units[0].key());
     assert(Unit::ofPackage(pkg.push("src")).len == 0us);
     remove(pkg);
 }
