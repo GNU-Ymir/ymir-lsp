@@ -8,17 +8,19 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.Project
 import com.redhat.devtools.lsp4ij.LanguageServerManager
+import com.intellij.openapi.vfs.VirtualFile
 import com.redhat.devtools.lsp4ij.server.OSProcessStreamConnectionProvider
 
 /**
- * Runs the language server of `commandLine`, started under `budget`. A server killed on the
- * budget is stopped and disabled, rather than restarted by LSP4IJ, and a notification names the
- * budget and where to raise it.
+ * Runs the language server of `commandLine`, started under `budget`, compiling at most
+ * `compiledDocuments` open documents. A server killed on the budget is stopped and disabled,
+ * rather than restarted by LSP4IJ, and a notification names the budget and where to raise it.
  */
 class YmirServerConnectionProvider(
     private val project: Project,
     private val budget: YmirMemoryBudget,
     commandLine: GeneralCommandLine,
+    private val compiledDocuments: Int = YmirSettings.DEFAULT_COMPILED_DOCUMENTS,
 ) : OSProcessStreamConnectionProvider(commandLine) {
 
     @Volatile
@@ -35,6 +37,9 @@ class YmirServerConnectionProvider(
     override fun addUnexpectedServerStopHandler(handler: Runnable) {
         super.addUnexpectedServerStopHandler { if (!exceeded()) handler.run() }
     }
+
+    override fun getInitializationOptions(rootUri: VirtualFile?): Any =
+        mapOf("compiledDocuments" to compiledDocuments)
 
     private fun exceeded(): Boolean {
         val exitCode = processHandler?.exitCode ?: return false

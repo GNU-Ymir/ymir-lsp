@@ -10,7 +10,8 @@ import com.redhat.devtools.lsp4ij.server.StreamConnectionProvider
 /**
  * Starts `ymir-lsp` on stdio, in the directory of the project, with the
  * environment of a login shell so that a server installed in the PATH of the
- * user is found, under the memory budget of the settings.
+ * user is found, under the memory budget of the settings, compiling the number
+ * of open documents they set.
  */
 class YmirLanguageServerFactory : LanguageServerFactory {
 
@@ -20,7 +21,7 @@ class YmirLanguageServerFactory : LanguageServerFactory {
         val commandLine = budget.commandLine(settings.serverPath)
             .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
         project.basePath?.let { commandLine.withWorkDirectory(it) }
-        return YmirServerConnectionProvider(project, budget, commandLine)
+        return YmirServerConnectionProvider(project, budget, commandLine, settings.compiledDocuments)
     }
 
     /** The workspace symbols are listed by `YmirSymbolContributor`, with their module, rather than by LSP4IJ. */

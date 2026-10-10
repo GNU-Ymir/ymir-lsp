@@ -19,6 +19,7 @@ class YmirSettings : SimplePersistentStateComponent<YmirSettings.Options>(Option
         var gyllirPath by string(DEFAULT_GYLLIR)
         var gdbPath by string(DEFAULT_GDB)
         var memoryBudget by property(DEFAULT_MEMORY_BUDGET)
+        var compiledDocuments by property(DEFAULT_COMPILED_DOCUMENTS)
     }
 
     /** The command starting the language server, a path or a name looked up in the PATH. */
@@ -49,11 +50,19 @@ class YmirSettings : SimplePersistentStateComponent<YmirSettings.Options>(Option
             state.memoryBudget = value.coerceAtLeast(0)
         }
 
+    /** The number of open documents the language server compiles at most, the most recently used, `0` for all. */
+    var compiledDocuments: Int
+        get() = state.compiledDocuments.coerceAtLeast(0)
+        set(value) {
+            state.compiledDocuments = value.coerceAtLeast(0)
+        }
+
     companion object {
         const val DEFAULT_SERVER = "ymir-lsp"
         const val DEFAULT_GYLLIR = "gyllir"
         const val DEFAULT_GDB = "gdb"
         const val DEFAULT_MEMORY_BUDGET = 2048
+        const val DEFAULT_COMPILED_DOCUMENTS = 5
 
         fun getInstance(): YmirSettings = service()
     }
