@@ -11,5 +11,5 @@ name = "ymir-lsp"
 git = "git@github.com:GNU-Ymir/ymir-lsp.git"
 
 [dependencies.ymirc]
-version = "master"
+version = "1.10.3"
 url = "git:https://github.com/GNU-Ymir/bootstrap.git"
