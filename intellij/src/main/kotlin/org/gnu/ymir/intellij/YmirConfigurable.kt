@@ -8,8 +8,8 @@ import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.panel
 
 /**
- * The page of the settings under Languages & Frameworks, choosing the language server and its memory budget,
- * gyllir and gdb.
+ * The page of the settings under Languages & Frameworks, choosing the language server, its memory budget and
+ * the documents it compiles, gyllir and gdb.
  */
 class YmirConfigurable : BoundConfigurable("Ymir") {
 
@@ -28,6 +28,12 @@ class YmirConfigurable : BoundConfigurable("Ymir") {
                     .bindIntText(settings::memoryBudget)
                     .comment("The memory the language server may use before it is stopped, <code>0</code> for no limit. " +
                              "Taken into account when the server is restarted.")
+            }
+            row("Compiled documents:") {
+                intTextField(0..Int.MAX_VALUE)
+                    .bindIntText(settings::compiledDocuments)
+                    .comment("The number of open documents the language server compiles, the most recently used, " +
+                             "<code>0</code> for all. Taken into account when the server is restarted.")
             }
             row("Gyllir:") {
                 textField()

@@ -234,9 +234,9 @@ __test a_change_checks_again_only_the_documents_reading_it {
     assert(code == 0);
     assert(names(response(msgs, 6i64).elements("result")) == ["one"]);
 
-    // the package of `lib` reads nothing of the other one, `main` reads `shapes`
+    // the package of `lib` reads nothing of the other one, `main` and `shapes` are checked together
     assert(published(msgs, lib) == 2us);
-    assert(published(msgs, shapes) == 1us);
+    assert(published(msgs, shapes) == 2us);
     assert(published(msgs, main) == 2us);
 }
 
@@ -367,6 +367,68 @@ __test the_diagnostics_carry_the_quick_fixes_of_the_server {
     for d in docs {
         assert(published(after, d._0) != 0us && latest(after, d._0).len == 0us, d._0);
     }
+}
+
+__test the_open_documents_of_a_target_are_checked_together {
+    let dir = env::currentDir().push("test_resources/server");
+    let shapes = Document::ofPath(dir.push("pkg/src/shapes.yr").toStr());
+    let main = Document::ofPath(dir.push("pkg/src/main.yr").toStr());
+    let broken = "in shapes;\n\npub fn one ()-> i32 {\n    let y: i32 = \"oops\";\n    y\n}\n";
+    let text = "mod .shapes;\n\nuse shapes;\n\nfn main () {\n    let _ = one ();\n}\n";
+    let doc = "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(main)) ~ "}}";
+
+    let input = request(1i64, "initialize", "{\"capabilities\":{}}") ~ notification("initialized", "{}")
+        ~ notification("textDocument/didOpen", "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(shapes)) ~ ",\"languageId\":\"ymir\",\"version\":1,\"text\":" ~ std::config::json::dump(copy Str(broken)) ~ "}}")
+        ~ opened(main, text, 2i64)
+        ~ request(3i64, "textDocument/definition", at(doc, 5, 14))
+        ~ request(4i64, "shutdown", "null")
+        ~ notification("exit", "null");
+
+    let (msgs, code) = session(input);
+    assert(code == 0);
+
+    // one check of the target publishes the diagnostics of each document, of its own file only
+    assert(published(msgs, shapes) == 1us && published(msgs, main) == 1us);
+    let diags = latest(msgs, shapes);
+    assert(diags.len == 1us && diags[0].str("code") ?? "" == "E4095");
+    assert(diags[0].int("range", "start", "line") ?? 0i64 == 3i64);
+    assert(latest(msgs, main).len == 0us);
+
+    let defs = response(msgs, 3i64).elements("result");
+    assert(defs.len == 1us && defs[0].str("uri") ?? "" == shapes);
+    assert(defs[0].int("range", "start", "line") ?? 0i64 == 2i64);
+}
+
+__test only_the_most_recently_used_documents_are_compiled {
+    let dir = env::currentDir().push("test_resources/server");
+    let shapes = Document::ofPath(dir.push("pkg/src/shapes.yr").toStr());
+    let main = Document::ofPath(dir.push("pkg/src/main.yr").toStr());
+    let broken = "in shapes;\n\npub fn one ()-> i32 {\n    let y: i32 = \"oops\";\n    y\n}\n";
+    let text = "mod .shapes;\n\nuse shapes;\n\nfn main () {\n    let _ = one ();\n}\n";
+    let docs = copy ["{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(u)) ~ "}}" for u in [shapes, main]];
+
+    let open = notification("initialized", "{}")
+        ~ notification("textDocument/didOpen", "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(shapes)) ~ ",\"languageId\":\"ymir\",\"version\":1,\"text\":" ~ std::config::json::dump(copy Str(broken)) ~ "}}")
+        ~ opened(main, text, 2i64)
+        ~ request(3i64, "textDocument/documentSymbol", docs[0])
+        ~ request(4i64, "textDocument/documentSymbol", docs[1]);
+    let end = request(5i64, "shutdown", "null") ~ notification("exit", "null");
+
+    // one document compiled at a time: each request on the other one compiles its target again
+    let (one, _) = session(request(1i64, "initialize", "{\"capabilities\":{},\"initializationOptions\":{\"compiledDocuments\":1}}") ~ open ~ end);
+    assert(names(response(one, 3i64).elements("result")) == ["one"]);
+    assert(published(one, main) == 2us && published(one, shapes) == 1us);
+    assert(latest(one, shapes).len == 1us && latest(one, main).len == 0us);
+
+    // by default, both are compiled together once
+    let (all, _) = session(request(1i64, "initialize", "{\"capabilities\":{}}") ~ open ~ end);
+    assert(published(all, main) == 1us && published(all, shapes) == 1us);
+
+    // a closed document is no longer compiled, its target being compiled again without it
+    let close = notification("textDocument/didClose", docs[0]);
+    let (closed, _) = session(request(1i64, "initialize", "{\"capabilities\":{}}") ~ open ~ close ~ request(6i64, "textDocument/documentSymbol", docs[1]) ~ end);
+    assert(published(closed, shapes) == 2us && latest(closed, shapes).len == 0us);
+    assert(published(closed, main) == 2us);
 }
 
 __test a_session_finds_the_usages_of_a_symbol_in_the_packages_of_the_workspace {
