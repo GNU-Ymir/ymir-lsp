@@ -30,7 +30,12 @@ its test directory a module of its `test-root`, `__test__.yr` by default, a pack
 library targets of the packages of `.deps/` the target selects, and the targets of its package it
 links, with the std its `[std]` resolved there if not the one of gyc, the `-I`, `-iprefix`,
 `-nostdinc` and `-fversion=` of the `flags` of the target, and the `__test` blocks. Any other file
-is checked alone. A document
+is checked alone. The open documents of a target are checked together, by one compilation of
+their modules as `-fmodule` selects them: each is given the diagnostics of its file, and the ones
+of the other files at its start. Only the 5 most recently opened, edited or queried documents are
+compiled, the `compiledDocuments` of the `initializationOptions`, `0` for all of them: the others
+keep the diagnostics of their latest check, and a query about one compiles it again. A closed
+document leaves the compilation of its target. A document
 is checked once the client stopped changing it for 250ms, the unsaved buffers of the client
 standing in for their files, and its warnings are reported as such, as with `gyllir build`. A
 save checks again the open documents reading a document changed since their latest check.
@@ -84,7 +89,8 @@ It runs under a memory budget set there, 2048 MiB by default and `0` for none: i
 scope killing it past the budget without letting it swap (`systemd-run --user --scope -p
 MemoryMax=<budget>M -p MemorySwapMax=0`), or else with the heap of its GC capped by
 `GC_MAXIMUM_HEAP_SIZE`. A server stopped on its budget is not restarted, and a notification
-offers to raise the budget or to restart it.
+offers to raise the budget or to restart it. The number of open documents the server compiles,
+5 by default, is set there as well.
 In IntelliJ IDEA, *File > New > Project… > Ymir* creates a gyllir package, an executable or a
 library, as `gyllir init` lays it out.
 
