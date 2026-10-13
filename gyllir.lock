@@ -3,7 +3,13 @@
 lock-version = 1
 
 [[package]]
+name = "std"
+url = "git:https://github.com/GNU-Ymir/yruntime.git"
+version = "1.16.6"
+sha = "259f265dcde80d3856e9fc94a4bd51393f3fc9f8"
+
+[[package]]
 name = "ymirc"
 url = "git:https://github.com/GNU-Ymir/bootstrap.git"
-version = "1.10.3"
-sha = "6eb13db817099571f59df521d5a4b8bb5b36a655"
+version = "1.10.4"
+sha = "827b10e38dacfa59d216240d63bcc6ca31dc006d"
