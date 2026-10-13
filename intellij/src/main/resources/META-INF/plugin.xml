@@ -40,7 +40,7 @@
                                 implementationClass="org.gnu.ymir.intellij.navigation.YmirTargetElementEvaluator"/>
 
         <lineIndentProvider implementation="org.gnu.ymir.intellij.format.YmirLineIndentProvider" order="first"/>
-        <typedHandler implementation="org.gnu.ymir.intellij.format.YmirTypedHandler"/>
+        <typedHandler implementation="org.gnu.ymir.intellij.format.YmirTypedHandler" order="first"/>
         <enterHandlerDelegate implementation="org.gnu.ymir.intellij.format.YmirEnterHandler" order="first"/>
         <formattingService implementation="org.gnu.ymir.intellij.format.YmirFormattingService" order="first"/>
         <lang.importOptimizer language="textmate" implementationClass="org.gnu.ymir.intellij.imports.YmirImportOptimizer"/>
