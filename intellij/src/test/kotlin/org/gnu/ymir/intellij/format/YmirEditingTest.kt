@@ -37,6 +37,10 @@ class YmirEditingTest : BasePlatformTestCase() {
         assertEquals("foo(a,\n    <caret>)", typed("foo(a,<caret>)", "\n"))
     }
 
+    fun testEnterContinuesTheValueOfANamedElement() {
+        assertEquals("fn main() {\n    foo(a-> 12\n            <caret>\n}", typed("fn main() {\n    foo(a-> 12<caret>\n}", "\n"))
+    }
+
     fun testEnterAfterAStatement() {
         assertEquals("fn main() {\n    foo();\n    <caret>\n}", typed("fn main() {\n    foo();<caret>\n}", "\n"))
     }
