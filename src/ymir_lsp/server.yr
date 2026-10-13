@@ -14,6 +14,7 @@ mod ::fixes;
 mod ::formatting;
 mod ::hover;
 mod ::symbols;
+mod ::tokens;
 mod ::usages;
 mod ::utils;
 
@@ -231,6 +232,7 @@ pub class Server {
             "textDocument/references"     => self:.references(params)
             "textDocument/documentHighlight" => self:.documentHighlight(params)
             "textDocument/documentSymbol" => self:.documentSymbol(params)
+            "textDocument/semanticTokens/full" => self:.semanticTokens(params)
             "textDocument/completion"     => self:.completion(params)
             "textDocument/codeAction"     => self:.codeAction(params)
             "textDocument/formatting"     => self.formatting(params)
@@ -342,6 +344,7 @@ pub class Server {
         caps["referencesProvider"] = copy Bool(true);
         caps["documentHighlightProvider"] = copy Bool(true);
         caps["documentSymbolProvider"] = copy Bool(true);
+        caps["semanticTokensProvider"] = tokens::provider();
         caps["completionProvider"] = completion;
         caps["codeActionProvider"] = actions;
         caps["documentFormattingProvider"] = copy Bool(true);
@@ -435,6 +438,21 @@ pub class Server {
         }
 
         copy Array()
+    }
+
+    /**
+     * @returns: the tokens of the document naming an entity, as of its compilation
+     */
+    fn semanticTokens(mut self, params: &Config)-> &Config {
+        let uri = self.uriOf(params) ?? "";
+        if let Ok(doc) = self._docs[uri] {
+            self:.touch(uri);
+            if let Ok(c) = self:.compiled(uri) {
+                return tokens::tokens(c.parser.getIndex(), doc.path, self._encoding);
+            }
+        }
+
+        copy data::None()
     }
 
     fn completion(mut self, params: &Config)-> &Config
