@@ -1,4 +1,3 @@
-compiler = "gyc"
 license = "GPL-v3"
 authors = ["Emile Cadorel <ecadorel@gmail.com>"]
 type = "executable"
@@ -6,6 +5,9 @@ libraries = ["gmp", "mpfr"]
 description = "Ymir language server"
 version = "0.1.0"
 name = "ymir-lsp"
+
+[compiler]
+version = "1.10.3"
 
 [std]
 version = "1.16.6"
