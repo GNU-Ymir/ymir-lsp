@@ -7,7 +7,7 @@ version = "0.1.0"
 name = "ymir-lsp"
 
 [compiler]
-version = "1.10.3"
+version = "1.10.4"
 
 [std]
 version = "1.16.6"
