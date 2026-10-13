@@ -70,5 +70,11 @@
             <keyboard-shortcut keymap="$default" first-keystroke="meta alt L"/>
             <add-to-group group-id="CodeFormatGroup" anchor="after" relative-to-action="ReformatCode"/>
         </action>
+        <action id="Ymir.ReformatWithServer"
+                class="org.gnu.ymir.intellij.format.YmirServerReformatAction"
+                text="Reformat Ymir Code with ymir-lsp"
+                description="Rewrite the Ymir file, or the declarations of its selection, in the canonical form of the language server">
+            <add-to-group group-id="CodeFormatGroup" anchor="after" relative-to-action="Ymir.ReformatCode"/>
+        </action>
     </actions>
 </idea-plugin>
