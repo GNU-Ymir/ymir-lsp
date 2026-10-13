@@ -10,10 +10,10 @@ import com.intellij.openapi.actionSystem.ex.ActionUtil
 import com.intellij.openapi.project.DumbAware
 
 /**
- * Rewrites the Ymir file of the editor in its canonical form, or the
- * declarations of its selection, by running *Reformat Code*, that LSP4IJ
- * answers with the formatting of `ymir-lsp`. Bound to Meta+Alt+L, Ctrl+Alt+L
- * being the screen lock of most Linux desktops.
+ * Formats the Ymir file of the editor, or the lines of its selection, by
+ * running *Reformat Code*, that [YmirFormattingService] answers without the
+ * language server. Bound to Meta+Alt+L, Ctrl+Alt+L being the screen lock of
+ * most Linux desktops.
  */
 class YmirReformatAction : AnAction(), DumbAware {
 

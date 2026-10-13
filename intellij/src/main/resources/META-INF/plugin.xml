@@ -4,10 +4,10 @@
     <vendor url="https://github.com/GNU-Ymir">GNU-Ymir</vendor>
 
     <description><![CDATA[
-    Support of the <a href="https://github.com/GNU-Ymir">Ymir</a> language: highlighting of the
-    <code>.yr</code> files, the diagnostics, quick fixes, hover, navigation, usages, outline,
-    completion, workspace symbols and formatting of the <code>ymir-lsp</code> language server, and
-    the debugging of the gyllir packages with gdb.
+    Support of the <a href="https://github.com/GNU-Ymir">Ymir</a> language: highlighting, indentation,
+    formatting and import optimization of the <code>.yr</code> files, the diagnostics, quick fixes,
+    hover, navigation, usages, outline, completion, workspace symbols and canonical formatting of the
+    <code>ymir-lsp</code> language server, and the debugging of the gyllir packages with gdb.
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
@@ -40,6 +40,7 @@
         <lineIndentProvider implementation="org.gnu.ymir.intellij.format.YmirLineIndentProvider" order="first"/>
         <typedHandler implementation="org.gnu.ymir.intellij.format.YmirTypedHandler"/>
         <enterHandlerDelegate implementation="org.gnu.ymir.intellij.format.YmirEnterHandler" order="first"/>
+        <formattingService implementation="org.gnu.ymir.intellij.format.YmirFormattingService" order="first"/>
     </extensions>
 
     <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
@@ -65,7 +66,7 @@
         <action id="Ymir.ReformatCode"
                 class="org.gnu.ymir.intellij.format.YmirReformatAction"
                 text="Reformat Ymir Code"
-                description="Rewrite the Ymir file, or the declarations of its selection, in its canonical form">
+                description="Format the Ymir file, or the lines of its selection, without the language server">
             <keyboard-shortcut keymap="$default" first-keystroke="meta alt L"/>
             <add-to-group group-id="CodeFormatGroup" anchor="after" relative-to-action="ReformatCode"/>
         </action>
