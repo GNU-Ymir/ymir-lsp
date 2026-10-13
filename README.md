@@ -102,13 +102,20 @@ library, as `gyllir init` lays it out.
 A *Gyllir* run configuration runs `gyllir run`, `build` or `test` in a package, the locations of
 the diagnostics of gyc linked to their file. A project rooted at a package gets its configurations
 when first opened (*Run* and *Test*, or *Test* and *Build* for a library), and the gutter of
-`fn main` and of each `__test` runs or debugs the package or its tests.
+`fn main` runs or debugs the package. A `test` configuration takes the `--filter` of the tests it
+runs, `module::test` glob segments, and an environment file of `KEY=VALUE` lines set in the
+environment of the tests (`--env-file`). The gutter of a `__test` runs or debugs this test alone,
+in a configuration filtering it by its module, the path of its file under the source or test
+directory, and its name, its rank among the tests of the module when unnamed, `name[*]` for the
+cases of a parameterized one: it takes the arguments and the environment file of the
+configuration running the tests of the package.
 
 Debugging a *Run* or *Test* configuration builds the program, or its tests with `gyllir test
 --dry`, and runs it under gdb, 14 or later, through its Debug Adapter Protocol and the client of
 LSP4IJ: the breakpoints of the gutter of the `.yr` files stop it, and *Frames* and *Variables*
 show its stack and the values of each frame. The arguments of a package of several targets name
-the one to debug first. gdb is `gdb` from the PATH by default, set under *Settings > Languages &
+the one to debug first, and the tests run on the filter of the configuration, in the variables of
+its environment file. gdb is `gdb` from the PATH by default, set under *Settings > Languages &
 Frameworks > Ymir*, and loads `intellij/gdb/ymir.py`, naming the frames by their demangled Ymir
 function, eliding the frames of the runtime, leaving the temporaries of the compiler out of the
 locals, and printing the slices, options, maps and objects of Ymir.
