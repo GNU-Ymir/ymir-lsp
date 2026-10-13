@@ -141,7 +141,8 @@ Enter, and a closing bracket typed at the start of a line, indent the line as th
 without the server: a block, and a list opened at the end of its line, once more than the line
 opening it, a list aligned on its first element, and once more the body of an `if`, a loop or an
 `else` without braces, the value of a `=` or a `=>` ending a line, and a line starting with an
-operator. Enter between two brackets puts the closing one on a line of its own.
+operator. Enter between two brackets puts the closing one on a line of its own, and an opening
+bracket typed is closed once, at the end of the file as elsewhere.
 
 *Code > Reformat Ymir Code* (Meta+Alt+L, Ctrl+Alt+L being the screen lock of most Linux
 desktops) runs *Reformat Code* in a `.yr` file, or on the lines of the selection, formatted by the
