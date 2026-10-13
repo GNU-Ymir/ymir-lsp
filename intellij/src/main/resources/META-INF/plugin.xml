@@ -36,6 +36,10 @@
         <directoryIndexExcludePolicy implementation="org.gnu.ymir.intellij.project.GyllirExcludePolicy"/>
         <gotoClassContributor implementation="org.gnu.ymir.intellij.symbol.YmirGotoClassContributor"/>
         <gotoSymbolContributor implementation="org.gnu.ymir.intellij.symbol.YmirGotoSymbolContributor"/>
+
+        <lineIndentProvider implementation="org.gnu.ymir.intellij.format.YmirLineIndentProvider" order="first"/>
+        <typedHandler implementation="org.gnu.ymir.intellij.format.YmirTypedHandler"/>
+        <enterHandlerDelegate implementation="org.gnu.ymir.intellij.format.YmirEnterHandler" order="first"/>
     </extensions>
 
     <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
