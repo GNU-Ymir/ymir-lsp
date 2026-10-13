@@ -37,12 +37,24 @@ class YmirEditingTest : BasePlatformTestCase() {
         assertEquals("foo(a,\n    <caret>)", typed("foo(a,<caret>)", "\n"))
     }
 
+    fun testEnterContinuesTheValueOfANamedElement() {
+        assertEquals("fn main() {\n    foo(a-> 12\n            <caret>\n}", typed("fn main() {\n    foo(a-> 12<caret>\n}", "\n"))
+    }
+
     fun testEnterAfterAStatement() {
         assertEquals("fn main() {\n    foo();\n    <caret>\n}", typed("fn main() {\n    foo();<caret>\n}", "\n"))
     }
 
     fun testClosingBraceTypedIndentsItsLine() {
         assertEquals("fn main() {\n    if (x) {\n        a();\n    }<caret>\n}", typed("fn main() {\n    if (x) {\n        a();\n        <caret>\n}", "}"))
+    }
+
+    fun testOpeningBraceTypedClosedOnce() {
+        assertEquals("fn main() {<caret>}", typed("fn main() <caret>", "{"))
+        assertEquals("fn main() {<caret>}", typed("fn main() <caret>}", "{"))
+        assertEquals("fn main() {<caret>}\n", typed("fn main() <caret>\n", "{"))
+        assertEquals("fn main() {\n    if (x) {<caret>}\n}", typed("fn main() {\n    if (x) <caret>\n}", "{"))
+        assertEquals("fn main() {\n    foo(<caret>)", typed("fn main() {\n    foo<caret>", "("))
     }
 
     fun testReformatCodeWithoutTheServer() {

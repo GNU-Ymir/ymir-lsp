@@ -4,7 +4,8 @@ package org.gnu.ymir.intellij.format
  * The indentation of the lines of a Ymir source as its canonical form lays them
  * out, from the tokens of the lines before them: the content of a block, and of
  * a list whose opening bracket ends its line, is indented once more than the
- * line opening it; the lines of a list are aligned on its first element; the
+ * line opening it; the lines of a list are aligned on its first element, and the
+ * ones continuing the value of a named element, `name-> value`, on this value; the
  * body of an `if`, a loop or an `else` without braces, the value following a
  * `=` or a `=>` ending a line, and a line starting with an operator are
  * indented once; a line starting with a closing bracket is the one opening it,
@@ -12,7 +13,8 @@ package org.gnu.ymir.intellij.format
  */
 class YmirIndenter(private val step: Int = INDENT) {
 
-    private class Open(val bracket: String, val line: Line, var align: Int, val keyword: String?)
+    // `value` is the column of the value of the named element of a list being read
+    private class Open(val bracket: String, val line: Line, var align: Int, val keyword: String?, var value: Int = NONE)
 
     // The indentation of a line the lines it opens are relative to, whether it continues an expression, and whether
     // it is the header of an `if`, a loop or an `else`
@@ -31,6 +33,7 @@ class YmirIndenter(private val step: Int = INDENT) {
     /** The indentation of the next line, starting with the token `first`, or empty if it is null. */
     fun indentOf(first: YmirToken?): Int {
         val top = stack.lastOrNull()
+        if (top != null && isInList() && top.value >= 0 && (first == null || !first.isClosing())) return top.value
         if (top != null && isInList() && top.align >= 0) return top.align
         if (first != null && first.isClosing() && top != null) return top.line.indent
         if (isInList()) return top!!.line.indent + step
@@ -55,6 +58,7 @@ class YmirIndenter(private val step: Int = INDENT) {
         if (t.isComment) return
         val top = stack.lastOrNull()
         if (top != null && top.align == PENDING) top.align = col
+        if (top != null && top.value == PENDING) top.value = col
 
         hanging = NONE
         when {
@@ -78,6 +82,8 @@ class YmirIndenter(private val step: Int = INDENT) {
                 if (t.text == "else") hanging = line.indent + step
             }
             t.isPunctuation("=") || t.isPunctuation("=>") -> hanging = line.indent + step
+            t.isPunctuation("->") && isInList() -> top!!.value = PENDING
+            t.isPunctuation(",") && isInList() -> top!!.value = NONE
         }
 
         previous = t

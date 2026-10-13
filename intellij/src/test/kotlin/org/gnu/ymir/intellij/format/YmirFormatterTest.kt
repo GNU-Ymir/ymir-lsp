@@ -83,6 +83,13 @@ class YmirFormatterTest : TestCase() {
         )
     }
 
+    fun testNamedElementContinuedOnItsValue() {
+        assertEquals(
+            "fn f() {\n    foo(b, a-> 12\n               + 12,\n        c);\n}\n",
+            YmirFormatter.format("fn f() {\nfoo(b, a-> 12\n+ 12,\nc);\n}\n"),
+        )
+    }
+
     fun testOnlyTheLinesOfTheRanges() {
         val text = "fn f() {\na();\nb();\n}\n"
         val b = text.indexOf("b()")

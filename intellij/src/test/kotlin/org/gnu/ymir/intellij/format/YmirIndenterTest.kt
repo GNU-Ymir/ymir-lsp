@@ -31,6 +31,15 @@ class YmirIndenterTest : TestCase() {
         assertEquals(8, indent("    if (a &&\n|"))
     }
 
+    fun testNamedElementContinuedOnItsValue() {
+        assertEquals(12, indent("    foo(a-> 12\n|+ 12);"))
+        assertEquals(12, indent("    foo(a-> 12\n|"))
+        assertEquals(15, indent("    foo(b, a-> 12\n|+ 12);"))
+        assertEquals(8, indent("    foo(a-> 12,\n|b);"))
+        assertEquals(8, indent("    foo(a-> 12,\n        b\n|+ 1);"))
+        assertEquals(8, indent("    foo(a-> 12\n|);"))
+    }
+
     fun testListOpenedAtTheEndOfItsLineIndentedOnce() {
         assertEquals(8, indent("    foo(\n|"))
     }
