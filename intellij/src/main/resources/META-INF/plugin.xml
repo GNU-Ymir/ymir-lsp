@@ -36,6 +36,8 @@
         <directoryIndexExcludePolicy implementation="org.gnu.ymir.intellij.project.GyllirExcludePolicy"/>
         <gotoClassContributor implementation="org.gnu.ymir.intellij.symbol.YmirGotoClassContributor"/>
         <gotoSymbolContributor implementation="org.gnu.ymir.intellij.symbol.YmirGotoSymbolContributor"/>
+        <targetElementEvaluator language="" order="first"
+                                implementationClass="org.gnu.ymir.intellij.navigation.YmirTargetElementEvaluator"/>
 
         <lineIndentProvider implementation="org.gnu.ymir.intellij.format.YmirLineIndentProvider" order="first"/>
         <typedHandler implementation="org.gnu.ymir.intellij.format.YmirTypedHandler"/>
