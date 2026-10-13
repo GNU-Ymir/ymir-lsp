@@ -1,0 +1,142 @@
+/**
+ * The semantic tokens of a document: the tokens of its semantic index naming an
+ * entity, typed by the kind of the entity, a declaration carrying the
+ * `declaration` modifier.
+ */
+in tokens;
+
+use ymirc::errors::lsp;
+use ymirc::lexing::word;
+use ymirc::semantic::{index, symbol};
+use ymirc::semantic::generator::value::variable;
+use ymirc::syntax::declaration::{block, custom, function};
+
+use std::config::data;
+
+/**
+ * @returns: the token types of the legend, a token sending the index of its own
+ */
+fn types()-> [[c8]] {
+    copy ["namespace", "type", "class", "enum", "interface", "struct", "parameter", "variable", "property", "function", "method", "macro"]
+}
+
+/**
+ * @returns: the `semanticTokensProvider` of the capabilities of the server
+ */
+pub fn provider()-> &Config {
+    let dmut tokenTypes = copy Array();
+    for t in types() {
+        tokenTypes:.push(copy Str(t));
+    }
+
+    let dmut tokenModifiers = copy Array();
+    tokenModifiers:.push(copy Str("declaration"));
+
+    let dmut legend = copy Dict();
+    legend["tokenTypes"] = tokenTypes;
+    legend["tokenModifiers"] = tokenModifiers;
+
+    let dmut res = copy Dict();
+    res["legend"] = legend;
+    res["full"] = copy Bool(true);
+    res
+}
+
+/**
+ * @returns: the `SemanticTokens` of the tokens of the index `idx` in the file
+ * `path` naming an entity, a token once, by position
+ */
+pub fn tokens(idx: &SemanticIndex, path: [c8], encoding: PositionEncoding)-> &Config {
+    use std::algorithm::sorting;
+
+    let dmut fields: [[c8] => ()] = copy [];
+    let dmut declared: [[c8] => ()] = copy [];
+    for o in idx.occurrences() if o.kind == OccurrenceKind::DECLARATION {
+        declared[keyOf(o.loc)] = ();
+        if (o.decl of VarDeclValue && o.scopeEnd.isEof) fields[keyOf(o.declLoc())] = ();
+    }
+
+    let dmut byToken: [[c8] => Occurrence] = copy [];
+    for o in idx.occurrences() if o.loc.filename == path {
+        let key = keyOf(o.loc);
+        if let Ok(prev) = byToken[key] && (prev.symbol !of EmptySymbol || o.symbol of EmptySymbol) continue;
+        byToken[key] = o;
+    }
+
+    let sorted = sort(copy [o for _, o in byToken], |a, b| => a.loc.line < b.loc.line || (a.loc.line == b.loc.line && a.loc.col < b.loc.col));
+
+    let all = types();
+    let dmut data = copy Array();
+    let mut line = 0u64;
+    let mut start = 0u64;
+    let mut end = 0u64;
+    for o in sorted {
+        let loc = Location(o.loc, o.loc, encoding);
+        if (loc.start.line != loc.end.line) continue;
+        if (loc.start.line == line && loc.start.character < end) continue;
+
+        let name = typeOf(o, fields);
+        let mut kind = 0us;
+        for i in 0us .. all.len if all[i] == name {
+            kind = i;
+        }
+
+        let column = if (loc.start.line == line) { loc.start.character - start } else { loc.start.character };
+        let modifiers = if (keyOf(o.loc) in declared) { 1i64 } else { 0i64 };
+        data:.push(copy Int(cast!i64(loc.start.line - line)));
+        data:.push(copy Int(cast!i64(column)));
+        data:.push(copy Int(cast!i64(loc.end.character - loc.start.character)));
+        data:.push(copy Int(cast!i64(kind)));
+        data:.push(copy Int(modifiers));
+
+        line = loc.start.line;
+        start = loc.start.character;
+        end = loc.end.character;
+    }
+
+    let dmut res = copy Dict();
+    res["data"] = data;
+    res
+}
+
+/**
+ * @returns: the token type of the entity `occ` names, a variable declared
+ * outside of any block (`fields`) being a property
+ */
+fn typeOf(occ: Occurrence, fields: [[c8] => ()])-> [c8] {
+    match occ.symbol {
+        ModuleSymbol()     => return "namespace";
+        c: &ClassSymbol    => return (if (c.isStruct) { "struct" } else { "class" });
+        f: &FunctionSymbol => return (if (f.isMethod) { "method" } else { "function" });
+        CtorSymbol()       => return "method";
+        DtorSymbol()       => return "method";
+        EnumSymbol()       => return "enum";
+        TraitSymbol()      => return "interface";
+        UnionSymbol()      => return "struct";
+        GlobalVarSymbol()  => return "variable";
+        d: &DefSymbol      => return (if (d.decl.isValue) { "variable" } else { "type" });
+        MacroSymbol()      => return "macro";
+        t: &TemplateSymbol => match t.decl.decl {
+            CtorDecl()     => return "method";
+            FunctionDecl() => return (if (t.isMethod) { "method" } else { "function" });
+            c: &TypeDecl   => return (if (c.isRecord || c.isEntity) { "struct" } else { "class" });
+            TraitDecl()    => return "interface";
+            EnumDecl()     => return "enum";
+            UnionDecl()    => return "struct";
+        }
+    }
+
+    match occ.decl {
+        ProtoVarDeclValue() => return "parameter";
+        VarDeclValue()      => return (if (keyOf(occ.declLoc()) in fields) { "property" } else { "variable" });
+    }
+
+    "type"
+}
+
+/**
+ * @returns: the key of the token `loc`, its file and its offset
+ */
+fn keyOf(loc: &Word)-> [c8] {
+    loc.filename ~ ":" ~ std::conv::to!{[c8]} (loc.seek)
+}
