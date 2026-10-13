@@ -95,6 +95,26 @@ class YmirDebugTest : BasePlatformTestCase() {
         assertEquals("Name the target whose tests to debug in the arguments, among cli, tool", unnamed.message)
     }
 
+    fun testDebuggingTestsRunsTheProgramOnTheFilterAndTheEnvironmentFile() {
+        val dir = pkg("name = \"demo\"\n")
+        myFixture.addFileToProject("pkg/.env", "export A=1\nB = 'b c'\n")
+        val configuration = GyllirRuns.create(project, dir, GyllirCommand.TEST, "server::*").configuration as GyllirRunConfiguration
+        configuration.envFile = ".env"
+        val target = GyllirDebugTarget.of(configuration)
+        assertEquals(listOf("test", "--dry"), target.build)
+        assertEquals(listOf("--filter", "server::*"), target.arguments)
+        assertEquals(mapOf("A" to "1", "B" to "b c"), target.environment)
+
+        val commandLine = YmirDebugAdapterDescriptor.commandLine(target, YmirSettings.getInstance(), null)
+        assertEquals(
+            "'gyllir' 'test' '--dry' </dev/null 1>&2 && exec 'env' 'A=1' 'B=b c' 'gdb' '-q' '-i=dap' '$dir/demo.test'",
+            commandLine.parametersList.list.last(),
+        )
+
+        configuration.envFile = "missing.env"
+        Assert.assertThrows(ExecutionException::class.java) { GyllirDebugTarget.of(configuration) }
+    }
+
     fun testBuildRunsNothingToDebug() {
         Assert.assertThrows(ExecutionException::class.java) { GyllirDebugTarget.of(GyllirCommand.BUILD, pkg("name = \"demo\"\n"), emptyList()) }
     }

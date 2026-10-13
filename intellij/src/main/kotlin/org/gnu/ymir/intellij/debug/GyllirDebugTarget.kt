@@ -3,6 +3,7 @@ package org.gnu.ymir.intellij.debug
 import com.intellij.execution.ExecutionException
 import com.intellij.util.execution.ParametersListUtil
 import org.gnu.ymir.intellij.run.GyllirCommand
+import org.gnu.ymir.intellij.run.GyllirEnvFile
 import org.gnu.ymir.intellij.run.GyllirPackages
 import org.gnu.ymir.intellij.run.GyllirRunConfiguration
 import org.gnu.ymir.intellij.run.GyllirTarget
@@ -10,14 +11,27 @@ import java.nio.file.Path
 
 /**
  * What debugging a gyllir run configuration builds, `gyllir <build>` in the
- * package `directory`, and then runs under gdb: `program` with `arguments`.
+ * package `directory`, and then runs under gdb: `program` with `arguments`,
+ * and the variables of `environment`.
  */
-data class GyllirDebugTarget(val directory: Path, val build: List<String>, val program: Path, val arguments: List<String>) {
+data class GyllirDebugTarget(
+    val directory: Path,
+    val build: List<String>,
+    val program: Path,
+    val arguments: List<String>,
+    val environment: Map<String, String> = emptyMap(),
+) {
 
     companion object {
 
-        fun of(configuration: GyllirRunConfiguration): GyllirDebugTarget =
-            of(configuration.command, Path.of(configuration.workingDirectory), ParametersListUtil.parse(configuration.arguments))
+        fun of(configuration: GyllirRunConfiguration): GyllirDebugTarget {
+            val target = of(configuration.command, Path.of(configuration.workingDirectory), ParametersListUtil.parse(configuration.arguments))
+            if (configuration.command != GyllirCommand.TEST) return target
+
+            val filter = configuration.filter.takeIf { it.isNotBlank() }?.let { listOf("--filter", it) } ?: emptyList()
+            val environment = configuration.envFilePath()?.let { GyllirEnvFile.read(it) } ?: emptyMap()
+            return target.copy(arguments = target.arguments + filter, environment = environment)
+        }
 
         /**
          * The program `gyllir <command> <arguments>` runs in `dir`, built in debug: the target `gyllir run` runs,

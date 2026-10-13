@@ -40,10 +40,33 @@ object GyllirPackages {
     }
 
     /**
+     * The module of `file`, a file of the package `pkg`: its path under the
+     * source or test directory holding it, `a::b` for `a/b.yr`, none outside them.
+     */
+    fun moduleOf(file: VirtualFile, pkg: VirtualFile): String? {
+        val (root, tables) = manifest(pkg.toNioPath())
+        val dirs = (tables.values + root).flatMap { listOf(it["source-dir"] ?: "src", it["test-dir"] ?: "test") }
+        val dir = dirs.mapNotNull { pkg.findFileByRelativePath(it) }
+            .filter { VfsUtilCore.isAncestor(it, file, true) }
+            .maxByOrNull { it.path.length } ?: return null
+        return VfsUtilCore.getRelativePath(file, dir, '/')?.removeSuffix(".yr")?.replace("/", "::")
+    }
+
+    /**
      * The targets of the package `dir` by name: its `[targets.<name>]` tables,
      * or the target named after the package when it declares none.
      */
     fun targets(dir: Path): Map<String, GyllirTarget> {
+        val (root, tables) = manifest(dir)
+        if (tables.isEmpty()) {
+            val name = root["name"] ?: dir.fileName.toString()
+            return mapOf(name to GyllirTarget(name, root, name))
+        }
+        return tables.mapValues { (name, entries) -> GyllirTarget(name, entries, entries["output"] ?: name) }
+    }
+
+    /** The top-level entries of the manifest of the package `dir`, and the ones of its `[targets.<name>]` tables by name. */
+    private fun manifest(dir: Path): Pair<Map<String, String>, Map<String, Map<String, String>>> {
         val lines = runCatching { Files.readAllLines(dir.resolve(MANIFEST)) }.getOrDefault(emptyList())
         val root = mutableMapOf<String, String>()
         val tables = linkedMapOf<String, MutableMap<String, String>>()
@@ -58,12 +81,7 @@ object GyllirPackages {
             val entry = ENTRY.matchEntire(line) ?: continue
             table?.put(entry.groupValues[1], entry.groupValues[2].removeSurrounding("\""))
         }
-
-        if (tables.isEmpty()) {
-            val name = root["name"] ?: dir.fileName.toString()
-            return mapOf(name to GyllirTarget(name, root, name))
-        }
-        return tables.mapValues { (name, entries) -> GyllirTarget(name, entries, entries["output"] ?: name) }
+        return root to tables
     }
 
     private val TYPE_LIBRARY = Regex("""^\s*type\s*=\s*"library"\s*(#.*)?$""")

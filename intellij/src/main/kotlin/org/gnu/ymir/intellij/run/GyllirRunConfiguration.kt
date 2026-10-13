@@ -22,12 +22,15 @@ import com.redhat.devtools.lsp4ij.dap.configurations.DAPRunConfigurationBase
 import com.redhat.devtools.lsp4ij.dap.definitions.DebugAdapterServerDefinition
 import org.gnu.ymir.intellij.YmirSettings
 import org.gnu.ymir.intellij.debug.YmirDebugAdapterFactory
+import java.nio.file.Files
 import java.nio.file.Path
 
 class GyllirRunConfigurationOptions : RunConfigurationOptions() {
     var command by string(GyllirCommand.RUN.id)
     var arguments by string("")
     var workingDirectory by string("")
+    var filter by string("")
+    var envFile by string("")
 }
 
 /**
@@ -59,20 +62,48 @@ class GyllirRunConfiguration(project: Project, factory: ConfigurationFactory, na
             options.workingDirectory = value
         }
 
+    /** The tests `test` runs, by the `--filter` of gyllir, all of them when not set. */
+    var filter: String
+        get() = options.filter.orEmpty()
+        set(value) {
+            options.filter = value
+        }
+
+    /** The file of `KEY=VALUE` lines `test` sets in the environment of the tests, none when not set. */
+    var envFile: String
+        get() = options.envFile.orEmpty()
+        set(value) {
+            options.envFile = value
+        }
+
+    /** The environment file, relative to the directory of the package. */
+    fun envFilePath(): Path? = envFile.takeIf { it.isNotBlank() }?.let { Path.of(workingDirectory).resolve(it) }
+
     fun suggestedName(): String = "gyllir ${command.id}"
 
     override fun checkConfiguration() {
         if (!GyllirPackages.isPackage(Path.of(workingDirectory))) {
             throw RuntimeConfigurationError("No ${GyllirPackages.MANIFEST} in '$workingDirectory'")
         }
+        val env = envFilePath()
+        if (command == GyllirCommand.TEST && env != null && !Files.isRegularFile(env)) {
+            throw RuntimeConfigurationError("No environment file '$env'")
+        }
     }
 
-    /** `gyllir <command> <arguments>`, in the directory of the package. */
+    /** `gyllir <command> <arguments>`, in the directory of the package, preceded by the filter and the environment file of `test`. */
     fun commandLine(): GeneralCommandLine =
         GeneralCommandLine(YmirSettings.getInstance().gyllirPath, command.id)
+            .withParameters(testOptions())
             .withParameters(ParametersListUtil.parse(arguments))
             .withWorkingDirectory(Path.of(workingDirectory))
             .withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE)
+
+    private fun testOptions(): List<String> {
+        if (command != GyllirCommand.TEST) return emptyList()
+        return (if (envFile.isNotBlank()) listOf("--env-file", envFile) else emptyList()) +
+            (if (filter.isNotBlank()) listOf("--filter", filter) else emptyList())
+    }
 
     override fun getConfigurationEditor(): SettingsEditor<out RunConfiguration> = GyllirSettingsEditor(project)
 
