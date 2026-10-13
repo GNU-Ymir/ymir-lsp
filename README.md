@@ -1,9 +1,9 @@
 # ymir-lsp
 
 The language server of Ymir, built on the `ymirc` frontend (`libymirc`): diagnostics, hover,
-definition, references, highlights, outline, workspace symbols, completion, quick fixes and
-formatting over the Language Server Protocol, on stdio or TCP. The repository also holds the
-IntelliJ plugin using it, in `intellij/`.
+definition, references, highlights, semantic tokens, outline, workspace symbols, completion,
+quick fixes and formatting over the Language Server Protocol, on stdio or TCP. The repository also
+holds the IntelliJ plugin using it, in `intellij/`.
 
 ## The server
 
@@ -49,6 +49,11 @@ The references of a symbol are its usages in the compilation of the document, an
 the packages of the workspace folders, sources and tests, compiled again first when a document
 they read changed since: the modules the document does not read are searched as well. The
 highlights of a symbol are its usages in the document.
+
+The semantic tokens of a document are its tokens naming an entity in its compilation, a token
+once: typed by the kind of the entity (`namespace`, `class`, `struct`, `enum`, `interface`, `type`,
+`function`, `method`, `macro`, `variable`, `parameter`, or `property` for a field), a declaration
+carrying the `declaration` modifier. A name resolving to nothing has none.
 
 A diagnostic carries its quick fixes: the edits ymirc proposes, preceded by the ones of the
 server. An undefined symbol is fixed by the `use` of each module declaring it publicly, among the
@@ -116,6 +121,9 @@ Alt+Enter on a diagnostic lists its quick fixes, along with the generic actions 
 *Find Usages* (Alt+F7), *Show Usages* (Ctrl+Alt+F7), and Ctrl+click on a declaration list the
 usages of a symbol in the packages of the workspace, and the ones of the file are highlighted
 under the caret.
+LSP4IJ cuts a `.yr` file into the semantic tokens of the server, Ctrl+click going to the declaration
+of a reference and showing the usages of a declaration, while a name without a token, one the server
+resolves to nothing, is neither highlighted nor navigated from.
 
 *Go to Class* lists the structs, classes, enums, traits and type `def`s of the workspace symbols
 of the server, and *Go to Symbol* all of them, with the module declaring them. Those of the std
