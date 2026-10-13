@@ -3,6 +3,7 @@ package org.gnu.ymir.intellij
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.openapi.project.Project
 import com.redhat.devtools.lsp4ij.LanguageServerFactory
+import com.redhat.devtools.lsp4ij.client.LanguageClientImpl
 import com.redhat.devtools.lsp4ij.client.features.LSPClientFeatures
 import com.redhat.devtools.lsp4ij.client.features.LSPWorkspaceSymbolFeature
 import com.redhat.devtools.lsp4ij.server.StreamConnectionProvider
@@ -11,7 +12,8 @@ import com.redhat.devtools.lsp4ij.server.StreamConnectionProvider
  * Starts `ymir-lsp` on stdio, in the directory of the project, with the
  * environment of a login shell so that a server installed in the PATH of the
  * user is found, under the memory budget of the settings, compiling the number
- * of open documents they set.
+ * of open documents they set, its client recording the unused `use`
+ * declarations it reports.
  */
 class YmirLanguageServerFactory : LanguageServerFactory {
 
@@ -23,6 +25,8 @@ class YmirLanguageServerFactory : LanguageServerFactory {
         project.basePath?.let { commandLine.withWorkDirectory(it) }
         return YmirServerConnectionProvider(project, budget, commandLine, settings.compiledDocuments)
     }
+
+    override fun createLanguageClient(project: Project): LanguageClientImpl = YmirLanguageClient(project)
 
     /** The workspace symbols are listed by `YmirSymbolContributor`, with their module, rather than by LSP4IJ. */
     override fun createClientFeatures(): LSPClientFeatures =
