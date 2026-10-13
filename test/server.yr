@@ -470,3 +470,42 @@ __test a_session_finds_the_usages_of_a_symbol_in_the_packages_of_the_workspace {
         assert(h.str("uri") ?? "" == "" && h.int("range", "start", "line") ?? -1i64 >= 6i64);
     }
 }
+
+__test the_semantic_tokens_are_the_entities_of_the_document_its_declarations_marked {
+    let path = env::currentDir().push("test_resources/server/tokens.yr");
+    let uri = Document::ofPath(path.toStr());
+    let doc = "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(uri)) ~ "}}";
+
+    let input = request(1i64, "initialize", "{\"capabilities\":{}}")
+        ~ notification("initialized", "{}")
+        ~ notification("textDocument/didOpen", "{\"textDocument\":{\"uri\":" ~ std::config::json::dump(copy Str(uri)) ~ ",\"languageId\":\"ymir\",\"version\":1,\"text\":" ~ std::config::json::dump(copy Str(sys::readFile(path))) ~ "}}")
+        ~ request(2i64, "textDocument/semanticTokens/full", doc)
+        ~ request(3i64, "shutdown", "null")
+        ~ notification("exit", "null");
+
+    let (msgs, code) = session(input);
+    assert(code == 0);
+
+    let provider = response(msgs, 1i64).at("result", "capabilities", "semanticTokensProvider");
+    assert(provider.boolean("full") ?? false);
+    assert(copy [t.str() ?? "" for t in provider.elements("legend", "tokenTypes")] == ["namespace", "type", "class", "enum", "interface", "struct", "parameter", "variable", "property", "function", "method", "macro"]);
+    assert(copy [t.str() ?? "" for t in provider.elements("legend", "tokenModifiers")] == ["declaration"]);
+
+    // the module, the class, its field, constructor and method, their parameters and locals, the undefined symbol left out
+    let data = copy [d.int() ?? -1i64 for d in response(msgs, 2i64).elements("result", "data")];
+    assert(data == [0i64, 3i64, 6i64, 0i64, 1i64,
+                    2i64, 6i64, 1i64, 2i64, 1i64,
+                    2i64, 8i64, 1i64, 8i64, 1i64,
+                    2i64, 8i64, 4i64, 10i64, 1i64,
+                    2i64, 11i64, 3i64, 10i64, 1i64,
+                    0i64, 5i64, 4i64, 6i64, 1i64,
+                    0i64, 6i64, 1i64, 6i64, 1i64,
+                    1i64, 8i64, 4i64, 6i64, 0i64,
+                    0i64, 5i64, 1i64, 8i64, 0i64,
+                    0i64, 4i64, 1i64, 6i64, 0i64,
+                    4i64, 3i64, 4i64, 9i64, 1i64,
+                    1i64, 8i64, 1i64, 7i64, 1i64,
+                    0i64, 4i64, 1i64, 2i64, 0i64,
+                    1i64, 4i64, 1i64, 7i64, 0i64,
+                    0i64, 2i64, 3i64, 10i64, 0i64]);
+}
