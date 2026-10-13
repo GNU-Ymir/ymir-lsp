@@ -18,8 +18,9 @@ import java.nio.file.Path
 
 /**
  * A run icon in the gutter of `fn main`, running or debugging the package,
- * and of each `__test`, running or debugging its tests. A TextMate file being
- * a single leaf, the entries are found in its text.
+ * and of each `__test`, running or debugging this test alone, or the tests of
+ * the package in a file outside its source and test directories. A TextMate
+ * file being a single leaf, the entries are found in its text.
  */
 class YmirRunLineMarkerProvider : LineMarkerProvider {
 
@@ -30,40 +31,47 @@ class YmirRunLineMarkerProvider : LineMarkerProvider {
             if (element.firstChild != null) continue
             val file = element.containingFile?.virtualFile ?: continue
             if (file.extension != "yr") continue
-            val pkg = GyllirPackages.packageOf(file)?.toNioPath() ?: continue
-            val start = element.textRange.startOffset
+            val pkg = GyllirPackages.packageOf(file) ?: continue
+            val dir = pkg.toNioPath()
+            val range = element.textRange
 
-            for (match in ENTRY.findAll(element.text)) {
-                val token = match.groups[1] ?: match.groups[2] ?: continue
-                val command = if (token.value == "__test") GyllirCommand.TEST else GyllirCommand.RUN
-                result.add(GyllirLineMarkerInfo(element, TextRange(start + token.range.first, start + token.range.last + 1), pkg, command))
+            for (match in MAIN.findAll(element.text)) {
+                val token = match.groups[1]!!.range
+                val main = TextRange(range.startOffset + token.first, range.startOffset + token.last + 1)
+                result.add(GyllirLineMarkerInfo(element, main, dir, GyllirCommand.RUN, ""))
+            }
+
+            val module = GyllirPackages.moduleOf(file, pkg)
+            for (test in GyllirTests.of(element.containingFile.text, module)) {
+                if (!range.contains(test.range)) continue
+                result.add(GyllirLineMarkerInfo(element, test.range, dir, GyllirCommand.TEST, test.filter.orEmpty()))
             }
         }
     }
 
     private companion object {
-        val ENTRY = Regex("""^[ \t]*(?:pub[ \t]+)?(?:fn[ \t]+(main)[ \t]*\(|(__test)\b)""", RegexOption.MULTILINE)
+        val MAIN = Regex("""^[ \t]*(?:pub[ \t]+)?fn[ \t]+(main)[ \t]*\(""", RegexOption.MULTILINE)
     }
 }
 
 /**
- * The icon running `command` on the package `pkg`, offering to run it or to
- * debug it on a click.
+ * The icon running `command` on the package `pkg`, the tests of `filter` for
+ * `test`, offering to run it or to debug it on a click.
  */
-private class GyllirLineMarkerInfo(element: PsiElement, range: TextRange, pkg: Path, command: GyllirCommand) :
+private class GyllirLineMarkerInfo(element: PsiElement, range: TextRange, pkg: Path, command: GyllirCommand, filter: String) :
     LineMarkerInfo<PsiElement>(
         element,
         range,
         AllIcons.RunConfigurations.TestState.Run,
-        { "Run 'gyllir ${command.id}'" },
+        { "Run '${label(command, filter)}'" },
         null,
         GutterIconRenderer.Alignment.CENTER,
-        { "Run 'gyllir ${command.id}'" },
+        { "Run '${label(command, filter)}'" },
     ) {
 
     private val actions: ActionGroup = DefaultActionGroup(
         listOf(DefaultRunExecutor.getRunExecutorInstance(), DefaultDebugExecutor.getDebugExecutorInstance())
-            .map { GyllirRunAction(pkg, command, it) },
+            .map { GyllirRunAction(pkg, command, filter, it) },
     )
 
     override fun createGutterRenderer(): GutterIconRenderer = object : LineMarkerGutterIconRenderer<PsiElement>(this) {
@@ -75,11 +83,17 @@ private class GyllirLineMarkerInfo(element: PsiElement, range: TextRange, pkg: P
     }
 }
 
-private class GyllirRunAction(private val pkg: Path, private val command: GyllirCommand, private val executor: Executor) :
-    DumbAwareAction("${executor.actionName} 'gyllir ${command.id}'", null, executor.icon) {
+private class GyllirRunAction(
+    private val pkg: Path,
+    private val command: GyllirCommand,
+    private val filter: String,
+    private val executor: Executor,
+) : DumbAwareAction("${executor.actionName} '${label(command, filter)}'", null, executor.icon) {
 
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
-        GyllirRuns.run(project, pkg, command, executor)
+        GyllirRuns.run(project, pkg, command, executor, filter)
     }
 }
+
+private fun label(command: GyllirCommand, filter: String): String = filter.ifEmpty { "gyllir ${command.id}" }
