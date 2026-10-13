@@ -29,7 +29,7 @@ class GyllirRunConfigurationProducer : LazyRunConfigurationProducer<GyllirRunCon
 
     override fun isConfigurationFromContext(configuration: GyllirRunConfiguration, context: ConfigurationContext): Boolean {
         val (pkg, command) = target(context) ?: return false
-        return configuration.command == command && configuration.workingDirectory == pkg.path
+        return configuration.command == command && configuration.workingDirectory == pkg.path && configuration.filter.isEmpty()
     }
 
     private fun target(context: ConfigurationContext): Pair<VirtualFile, GyllirCommand>? {
