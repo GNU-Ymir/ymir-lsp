@@ -45,6 +45,14 @@ class YmirEditingTest : BasePlatformTestCase() {
         assertEquals("fn main() {\n    if (x) {\n        a();\n    }<caret>\n}", typed("fn main() {\n    if (x) {\n        a();\n        <caret>\n}", "}"))
     }
 
+    fun testOpeningBraceTypedClosedOnce() {
+        assertEquals("fn main() {<caret>}", typed("fn main() <caret>", "{"))
+        assertEquals("fn main() {<caret>}", typed("fn main() <caret>}", "{"))
+        assertEquals("fn main() {<caret>}\n", typed("fn main() <caret>\n", "{"))
+        assertEquals("fn main() {\n    if (x) {<caret>}\n}", typed("fn main() {\n    if (x) <caret>\n}", "{"))
+        assertEquals("fn main() {\n    foo(<caret>)", typed("fn main() {\n    foo<caret>", "("))
+    }
+
     fun testReformatCodeWithoutTheServer() {
         myFixture.configureByText("main.yr", "fn main ( ) {\nlet x=1 ;\n}\n")
         myFixture.performEditorAction(IdeActions.ACTION_EDITOR_REFORMAT)
