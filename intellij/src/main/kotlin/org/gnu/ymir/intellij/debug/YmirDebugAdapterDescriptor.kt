@@ -54,10 +54,14 @@ class YmirDebugAdapterDescriptor(
 
     companion object {
 
-        /** `gyllir <build>`, its output on the error stream, followed on success by gdb on the program, loading `script`. */
+        /**
+         * `gyllir <build>`, its output on the error stream, followed on success by gdb on the program, loading
+         * `script`, in the environment of the program.
+         */
         fun commandLine(target: GyllirDebugTarget, settings: YmirSettings, script: Path?): GeneralCommandLine {
             val build = listOf(settings.gyllirPath) + target.build
-            val gdb = listOf(settings.gdbPath, "-q", "-i=dap") +
+            val environment = if (target.environment.isEmpty()) emptyList() else listOf("env") + target.environment.map { (k, v) -> "$k=$v" }
+            val gdb = environment + listOf(settings.gdbPath, "-q", "-i=dap") +
                 (script?.let { listOf("-x", it.toString()) } ?: emptyList()) +
                 target.program.toString()
             return GeneralCommandLine("/bin/sh", "-c", "${shell(build)} </dev/null 1>&2 && exec ${shell(gdb)}")
