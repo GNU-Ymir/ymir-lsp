@@ -4,10 +4,10 @@
     <vendor url="https://github.com/GNU-Ymir">GNU-Ymir</vendor>
 
     <description><![CDATA[
-    Support of the <a href="https://github.com/GNU-Ymir">Ymir</a> language: highlighting of the
-    <code>.yr</code> files, the diagnostics, quick fixes, hover, navigation, usages, outline,
-    completion, workspace symbols and formatting of the <code>ymir-lsp</code> language server, and
-    the debugging of the gyllir packages with gdb.
+    Support of the <a href="https://github.com/GNU-Ymir">Ymir</a> language: highlighting, indentation,
+    formatting and import optimization of the <code>.yr</code> files, the diagnostics, quick fixes,
+    hover, navigation, usages, outline, completion, workspace symbols and canonical formatting of the
+    <code>ymir-lsp</code> language server, and the debugging of the gyllir packages with gdb.
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
@@ -36,6 +36,12 @@
         <directoryIndexExcludePolicy implementation="org.gnu.ymir.intellij.project.GyllirExcludePolicy"/>
         <gotoClassContributor implementation="org.gnu.ymir.intellij.symbol.YmirGotoClassContributor"/>
         <gotoSymbolContributor implementation="org.gnu.ymir.intellij.symbol.YmirGotoSymbolContributor"/>
+
+        <lineIndentProvider implementation="org.gnu.ymir.intellij.format.YmirLineIndentProvider" order="first"/>
+        <typedHandler implementation="org.gnu.ymir.intellij.format.YmirTypedHandler"/>
+        <enterHandlerDelegate implementation="org.gnu.ymir.intellij.format.YmirEnterHandler" order="first"/>
+        <formattingService implementation="org.gnu.ymir.intellij.format.YmirFormattingService" order="first"/>
+        <lang.importOptimizer language="textmate" implementationClass="org.gnu.ymir.intellij.imports.YmirImportOptimizer"/>
     </extensions>
 
     <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
@@ -61,9 +67,15 @@
         <action id="Ymir.ReformatCode"
                 class="org.gnu.ymir.intellij.format.YmirReformatAction"
                 text="Reformat Ymir Code"
-                description="Rewrite the Ymir file, or the declarations of its selection, in its canonical form">
+                description="Format the Ymir file, or the lines of its selection, without the language server">
             <keyboard-shortcut keymap="$default" first-keystroke="meta alt L"/>
             <add-to-group group-id="CodeFormatGroup" anchor="after" relative-to-action="ReformatCode"/>
+        </action>
+        <action id="Ymir.ReformatWithServer"
+                class="org.gnu.ymir.intellij.format.YmirServerReformatAction"
+                text="Reformat Ymir Code with ymir-lsp"
+                description="Rewrite the Ymir file, or the declarations of its selection, in the canonical form of the language server">
+            <add-to-group group-id="CodeFormatGroup" anchor="after" relative-to-action="Ymir.ReformatCode"/>
         </action>
     </actions>
 </idea-plugin>

@@ -122,9 +122,25 @@ of the server, and *Go to Symbol* all of them, with the module declaring them. T
 and of `.deps`, which is excluded from a project rooted at a package, are listed with the
 non-project items.
 
+Enter, and a closing bracket typed at the start of a line, indent the line as the formatting does,
+without the server: a block, and a list opened at the end of its line, once more than the line
+opening it, a list aligned on its first element, and once more the body of an `if`, a loop or an
+`else` without braces, the value of a `=` or a `=>` ending a line, and a line starting with an
+operator. Enter between two brackets puts the closing one on a line of its own.
+
 *Code > Reformat Ymir Code* (Meta+Alt+L, Ctrl+Alt+L being the screen lock of most Linux
-desktops) runs *Reformat Code* in a `.yr` file, which the server formats, or only the declarations
-of the selection.
+desktops) runs *Reformat Code* in a `.yr` file, or on the lines of the selection, formatted by the
+plugin rather than by the server: each line indented as on Enter, a line continuing the expression
+of the line before it moved along with it, the tokens of a line spaced as the server spaces them,
+the spaces aligning a `=`, a `=>`, a `{` or a comment kept, the trailing spaces removed and the
+empty lines following each other merged. Only the whitespace changes: no line is broken or joined,
+and the `use` declarations are left in their order. *Code > Reformat Ymir Code with ymir-lsp*
+rewrites the file, or the declarations of the selection, in the canonical form of the server.
+
+*Code > Optimize Imports* (Ctrl+Alt+O) rewrites the top-level `use` declarations of a `.yr` file in
+their canonical form, as the formatting of the server does, without the server, and removes the
+ones the latest diagnostics of the session report unused (E3038). A run of declarations holding a
+comment, or one that is not a plain path, is left as it is.
 
 The build downloads the IDE of `platformVersion` (`gradle.properties`). To build against an
 installed one instead, set `platformLocalPath` to its directory, e.g. in

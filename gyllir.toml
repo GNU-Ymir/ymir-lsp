@@ -7,9 +7,13 @@ description = "Ymir language server"
 version = "0.1.0"
 name = "ymir-lsp"
 
+[std]
+version = "1.16.6"
+url = { git = "https://github.com/GNU-Ymir/yruntime.git" }
+
 [registry]
 git = "git@github.com:GNU-Ymir/ymir-lsp.git"
 
 [dependencies.ymirc]
-version = "1.10.3"
+version = "1.10.4"
 url = "git:https://github.com/GNU-Ymir/bootstrap.git"
