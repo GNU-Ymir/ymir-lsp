@@ -41,6 +41,7 @@
         <typedHandler implementation="org.gnu.ymir.intellij.format.YmirTypedHandler"/>
         <enterHandlerDelegate implementation="org.gnu.ymir.intellij.format.YmirEnterHandler" order="first"/>
         <formattingService implementation="org.gnu.ymir.intellij.format.YmirFormattingService" order="first"/>
+        <lang.importOptimizer language="textmate" implementationClass="org.gnu.ymir.intellij.imports.YmirImportOptimizer"/>
     </extensions>
 
     <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
